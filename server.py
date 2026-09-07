@@ -313,9 +313,21 @@ async def update_friend_request(request):
     except ValueError:
         return await json_response({'error': '申请无效'}, 400)
     action = (await request.json()).get('action')
-    if action not in ('accept', 'reject'):
+    if action not in ('accept', 'reject', 'delete'):
         return await json_response({'error': '操作无效'}, 400)
     connection = db()
+    if action == 'delete':
+        row = connection.execute(
+            'SELECT id FROM friend_requests WHERE id = ? AND (sender_id = ? OR recipient_id = ?) AND status = ?',
+            (request_id, user['id'], user['id'], 'accepted')
+        ).fetchone()
+        if not row:
+            connection.close()
+            return await json_response({'error': '好友关系不存在'}, 404)
+        connection.execute('DELETE FROM friend_requests WHERE id = ?', (request_id,))
+        connection.commit()
+        connection.close()
+        return await json_response({'ok': True, 'status': 'deleted'})
     row = connection.execute(
         'SELECT * FROM friend_requests WHERE id = ? AND recipient_id = ? AND status = ?',
         (request_id, user['id'], 'pending')

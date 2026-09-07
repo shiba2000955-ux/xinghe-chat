@@ -6,9 +6,9 @@ const seedConversations = [
   { id: 'lin', name: '林夏', handle: '@linxia', note: '摄影师', avatar: '林', tone: 'purple', preview: '你：下次一起去看展吧', time: '周六', unread: 0, online: false, group: false, messages: [{ author: '我', text: '下次一起去看展吧。', time: '周六', mine: true }] }
 ];
 const seedContacts = [
-  { id: 'zhi', name: '周芷若', handle: '@zhi_ruo', note: '产品设计师', avatar: '周', tone: '', online: true, relation: '好友' },
-  { id: 'chen', name: '陈默', handle: '@chenmo', note: '内容策略', avatar: '陈', tone: 'orange', online: false, relation: '好友' },
-  { id: 'lin', name: '林夏', handle: '@linxia', note: '摄影师', avatar: '林', tone: 'purple', online: false, relation: '好友' },
+  { id: 'zhi', name: '周芷若', handle: '@zhi_ruo', note: '产品设计师', avatar: '周', tone: '', online: true, relation: '好友', builtIn: true },
+  { id: 'chen', name: '陈默', handle: '@chenmo', note: '内容策略', avatar: '陈', tone: 'orange', online: false, relation: '好友', builtIn: true },
+  { id: 'lin', name: '林夏', handle: '@linxia', note: '摄影师', avatar: '林', tone: 'purple', online: false, relation: '好友', builtIn: true },
   { id: 'miao', name: '苗苗', handle: '@miaomiao', note: '城市漫游者', avatar: '苗', tone: 'blue', online: true, relation: '待处理' }
 ];
 const defaultProfile = { name: '林舟', handle: '@linzhou', bio: '保持好奇，认真生活', avatar: '林', avatarUrl: '' };
@@ -240,19 +240,32 @@ function bindContactActions() {
         contact.relation = '好友';
       } else if (button.dataset.action === 'reject') {
         state.contacts = state.contacts.filter(item => item.id !== contact.id);
+      } else if (button.dataset.action === 'delete') {
+        if (!confirm(`确定删除好友“${contact.name}”吗？`)) return;
+        await apiFetch(`/api/friend-requests/${contact.requestId}`, { method: 'POST', body: JSON.stringify({ action: 'delete' }) });
+        state.contacts = state.contacts.filter(item => item.id !== contact.id);
+        state.conversations = state.conversations.filter(item => item.id !== contact.id);
       } else if (button.dataset.action === 'chat') {
         ensureConversation(contact.id); closeModal(); return;
       }
-      await syncContacts(); persist(); openContacts(); showToast(button.dataset.action === 'accept' ? '已添加为好友' : '已忽略好友申请');
+      await syncContacts(); persist(); openContacts(); showToast(button.dataset.action === 'accept' ? '已添加为好友' : button.dataset.action === 'delete' ? '好友已删除' : '已忽略好友申请');
     } catch (error) { showToast(error.message); }
   }));
 }
 async function openContacts() {
   try { await syncContacts(); } catch (error) { showToast(error.message); }
-  openModal('联系人', `<div class="modal-section"><label class="modal-label">搜索用户或账号 ID</label><input class="modal-input" id="contactSearch" placeholder="例如：someone" /><div class="modal-actions"><button class="modal-btn primary" id="findContact">查找并添加</button></div></div><div class="modal-section"><label class="modal-label">我的联系人</label><div id="contactRows">${renderContactRows()}</div></div>`);
+  openModal('联系人', `<div class="modal-section"><label class="modal-label">搜索用户或账号 ID</label><input class="modal-input" id="contactSearch" placeholder="例如：someone" /><div class="modal-actions"><button class="modal-btn primary" id="findContact">查找并添加</button><button class="modal-btn danger" id="clearBuiltInBtn">清除原始好友</button></div></div><div class="modal-section"><label class="modal-label">我的联系人</label><div id="contactRows">${renderContactRows()}</div></div>`);
   bindContactActions();
+  $('#clearBuiltInBtn').addEventListener('click', clearBuiltInContacts);
 }
-function renderContactRows() { return state.contacts.map(contact => `<div class="request-row"><div class="${avatarClass(contact)}">${renderAvatar(contact)}</div><div><strong>${escapeHtml(contact.name)}</strong><small>${escapeHtml(contact.handle)} · ${escapeHtml(contact.note)}</small></div>${contact.relation === '待处理' ? `<div class="request-actions"><button data-action="accept" data-id="${contact.id}">同意</button><button data-action="reject" data-id="${contact.id}">忽略</button></div>` : contact.relation === '已发送' ? '<small>等待对方同意</small>' : `<div class="request-actions"><button data-action="chat" data-id="${contact.id}">聊天</button></div>`}</div>`).join('') || '<div class="empty-state">还没有联系人</div>'; }
+function renderContactRows() { return state.contacts.map(contact => `<div class="request-row"><div class="${avatarClass(contact)}">${renderAvatar(contact)}</div><div><strong>${escapeHtml(contact.name)}</strong><small>${escapeHtml(contact.handle)} · ${escapeHtml(contact.note)}</small></div>${contact.relation === '待处理' ? `<div class="request-actions"><button data-action="accept" data-id="${contact.id}">同意</button><button data-action="reject" data-id="${contact.id}">忽略</button></div>` : contact.relation === '已发送' ? '<small>等待对方同意</small>' : `<div class="request-actions"><button data-action="chat" data-id="${contact.id}">聊天</button>${contact.requestId ? `<button data-action="delete" data-id="${contact.id}">删除</button>` : ''}</div>`}</div>`).join('') || '<div class="empty-state">还没有联系人</div>'; }
+function clearBuiltInContacts() {
+  const builtInIds = new Set(seedContacts.filter(contact => contact.builtIn).map(contact => contact.id));
+  state.contacts = state.contacts.filter(contact => !contact.builtIn && !builtInIds.has(contact.id));
+  state.conversations = state.conversations.filter(conversation => !builtInIds.has(conversation.id));
+  if (!activeConversation() || builtInIds.has(state.activeId)) state.activeId = state.conversations[0] ? state.conversations[0].id : '';
+  persist(); closeModal(); renderList(); renderChat(); showToast('原始好友已清除，自己添加的好友已保留');
+}
 async function findContact() {
   const query = $('#contactSearch').value.trim().replace(/^@/, '');
   if (!query) return showToast('请输入账号 ID');
