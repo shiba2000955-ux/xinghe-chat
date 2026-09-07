@@ -1,5 +1,7 @@
 import asyncio
 import hashlib
+import base64
+import hmac
 import json
 import os
 import secrets
@@ -12,6 +14,7 @@ ROOT = Path(__file__).parent
 DB_PATH = Path(os.environ.get('NOVA_DB_PATH', ROOT / 'nova.db'))
 PORT = int(os.environ.get('PORT', '5173'))
 CLIENTS = {}
+TOKEN_SECRET = os.environ.get('NOVA_TOKEN_SECRET', 'nova-development-secret')
 
 
 def db():
@@ -54,14 +57,33 @@ def public_user(row):
 
 
 def token_for(user):
-    token = secrets.token_urlsafe(32)
+    raw = str(user['id']).encode('utf-8')
+    signature = hmac.new(TOKEN_SECRET.encode('utf-8'), raw, hashlib.sha256).hexdigest()
+    token = f'{base64.urlsafe_b64encode(raw).decode().rstrip("=")}.{signature}'
     CLIENTS[token] = {'user': public_user(user), 'socket': None}
     return token
 
 
+def authenticated_user(token):
+    if not token or '.' not in token:
+        return None
+    encoded_id, signature = token.split('.', 1)
+    try:
+        raw = base64.urlsafe_b64decode(encoded_id + '=' * (-len(encoded_id) % 4))
+        user_id = int(raw.decode('utf-8'))
+    except (ValueError, UnicodeDecodeError, base64.binascii.Error):
+        return None
+    expected = hmac.new(TOKEN_SECRET.encode('utf-8'), raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+    connection = db()
+    user = connection.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+    connection.close()
+    return public_user(user) if user else None
+
+
 def session_user(request):
-    session = CLIENTS.get(request.headers.get('X-Auth-Token'))
-    return session['user'] if session else None
+    return authenticated_user(request.headers.get('X-Auth-Token'))
 
 
 def user_by_id(connection, user_id):
@@ -222,9 +244,10 @@ async def broadcast(payload):
 
 async def websocket(request):
     token = request.query.get('token')
-    session = CLIENTS.get(token)
-    if not session:
+    user = authenticated_user(token)
+    if not user:
         return web.Response(status=401, text='登录已失效')
+    session = CLIENTS.setdefault(token, {'user': user, 'socket': None})
     socket = web.WebSocketResponse(heartbeat=25)
     await socket.prepare(request)
     session['socket'] = socket

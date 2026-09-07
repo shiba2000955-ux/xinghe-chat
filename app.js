@@ -47,6 +47,13 @@ async function apiFetch(path, options = {}) {
   if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const response = await fetch(path, { ...options, headers });
   const result = await response.json();
+  if (response.status === 401) {
+    localStorage.removeItem('nova-token'); localStorage.removeItem('nova-user');
+    authToken = ''; currentUser = null;
+    if (socket) { socket.close(); socket = null; }
+    $('#authScreen').hidden = false;
+    showToast('登录已失效，请重新登录');
+  }
   if (!response.ok) throw new Error(result.error || '网络请求失败');
   return result;
 }
