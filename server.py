@@ -143,7 +143,7 @@ def user_by_id(connection, user_id):
 
 
 async def json_response(data, status=200):
-    return web.json_response(data, status=status)
+    return web.json_response(data, status=status, dumps=lambda value: json.dumps(value, ensure_ascii=False, default=str))
 
 
 async def register(request):
