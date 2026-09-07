@@ -151,8 +151,8 @@ async def register(request):
     display_name = str(payload.get('name', '')).strip() or username
     if len(username) < 3 or len(password) < 6:
         return await json_response({'error': '用户名至少 3 位，密码至少 6 位'}, 400)
-    connection = db()
     try:
+        connection = db()
         cursor = connection.execute(
             'INSERT INTO users(username, password_hash, display_name) VALUES (?, ?, ?) '
             'RETURNING id, username, password_hash, display_name',
@@ -162,8 +162,13 @@ async def register(request):
         cursor.close()
         connection.commit()
     except (sqlite3.IntegrityError, psycopg2.IntegrityError if psycopg2 else sqlite3.IntegrityError):
-        connection.close()
+        if 'connection' in locals():
+            connection.close()
         return await json_response({'error': '用户名已经存在'}, 409)
+    except Exception as error:
+        if 'connection' in locals():
+            connection.close()
+        return await json_response({'error': f'数据库连接失败：{error}'}, 503)
     connection.close()
     return await json_response({'token': token_for(user), 'user': public_user(user)})
 
@@ -337,7 +342,13 @@ async def websocket(request):
 
 
 async def health(request):
-    return await json_response({'ok': True, 'service': 'nova-messenger'})
+    try:
+        connection = db()
+        connection.execute('SELECT 1').fetchone()
+        connection.close()
+        return await json_response({'ok': True, 'service': 'nova-messenger', 'database': 'connected'})
+    except Exception as error:
+        return await json_response({'ok': False, 'service': 'nova-messenger', 'database': 'error', 'error': str(error)}, 503)
 
 
 async def index(request):

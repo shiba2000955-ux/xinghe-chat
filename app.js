@@ -150,7 +150,10 @@ $('#avatarInput').addEventListener('change', event => { const file = event.targe
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); $('#searchInput').focus(); } });
 async function authenticate(mode, username, password, name) {
   const response = await fetch(`/api/${mode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, name }) });
-  const result = await response.json(); if (!response.ok) throw new Error(result.error || '登录失败');
+  const raw = await response.text();
+  let result;
+  try { result = JSON.parse(raw); } catch { throw new Error(`服务器暂时不可用（HTTP ${response.status}）`); }
+  if (!response.ok) throw new Error(result.error || '登录失败');
   authToken = result.token; currentUser = result.user; localStorage.setItem('nova-token', authToken); localStorage.setItem('nova-user', JSON.stringify(currentUser)); state.profile.name = currentUser.name; state.profile.handle = `@${currentUser.username}`; persist(); await syncContacts(); await loadHistory(); connectSocket(); $('#authScreen').hidden = true;
 }
 function connectSocket() {
