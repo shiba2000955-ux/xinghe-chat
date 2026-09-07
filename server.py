@@ -328,7 +328,7 @@ async def websocket(request):
                 continue
             if payload.get('type') != 'message' or not str(payload.get('body', '')).strip():
                 continue
-            body = str(payload['body']).strip()[:4000]
+            body = str(payload['body']).strip()[:3_000_000]
             recipient = str(payload.get('recipient', '')).strip()
             sender = session['user']['username']
             connection = db()

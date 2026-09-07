@@ -36,11 +36,12 @@ function renderChat() {
   ['activeAvatar', 'detailsAvatar'].forEach(id => { const node = $(`#${id}`); node.innerHTML = renderAvatar(item); node.className = `${avatarClass(item)} ${id === 'activeAvatar' ? 'avatar-large' : 'details-avatar avatar-xl'}`; });
   $('#activeName').textContent = item.name; $('#activeStatus').innerHTML = item.online ? '<span class="online-dot"></span> 在线，回复很快' : `<span>${escapeHtml(item.note)}</span>`;
   $('#detailsName').textContent = item.name; $('#detailsHandle').textContent = `${item.handle} · ${item.group ? item.note : '武汉'}`; $('#detailsNote').textContent = item.note;
-  $('#messageArea').innerHTML = `<div class="date-divider">今天</div>${item.messages.map(message => `<div class="message-row ${message.mine ? 'mine' : ''}">${message.mine ? '' : `<div class="${avatarClass(item)} message-avatar">${renderAvatar(item)}</div>`}<div class="bubble-wrap">${message.mine ? '' : `<div class="message-author">${escapeHtml(message.author)}</div>`}<div class="bubble">${escapeHtml(message.text).replace(/\n/g, '<br>')}</div><div class="message-time">${message.time}${message.mine ? ' · 已送达' : ''}</div></div></div>`).join('')}`;
+  $('#messageArea').innerHTML = `<div class="date-divider">今天</div>${item.messages.map(message => `<div class="message-row ${message.mine ? 'mine' : ''}">${message.mine ? '' : `<div class="${avatarClass(item)} message-avatar">${renderAvatar(item)}</div>`}<div class="bubble-wrap">${message.mine ? '' : `<div class="message-author">${escapeHtml(message.author)}</div>`}${message.attachment ? `<a class="file-bubble" href="${message.attachment.dataUrl || '#'}" download="${escapeHtml(message.attachment.name)}">📎 <strong>${escapeHtml(message.attachment.name)}</strong><small>${formatBytes(message.attachment.size)} · 下载文件</small></a>` : `<div class="bubble">${escapeHtml(message.text).replace(/\n/g, '<br>')}</div>`}<div class="message-time">${message.time}${message.mine ? ' · 已送达' : ''}</div></div></div>`).join('')}`;
   $('#messageArea').scrollTop = $('#messageArea').scrollHeight;
 }
 function selectConversation(id) { state.activeId = id; const item = activeConversation(); item.unread = 0; persist(); renderList(); renderChat(); }
 function escapeHtml(text) { return String(text).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
+function formatBytes(bytes) { if (!bytes) return '0 B'; if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`; return `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
 function showToast(message) { const toast = $('#toast'); toast.textContent = message; toast.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => toast.classList.remove('show'), 2400); }
 async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}), 'X-Auth-Token': authToken };
@@ -84,7 +85,8 @@ async function loadHistory() {
       state.conversations.unshift(conversation);
     }
     const exists = conversation.messages.some(entry => entry.text === message.body && entry.serverTime === message.created_at);
-    if (!exists) conversation.messages.push({ author: message.sender === currentUser.username ? state.profile.name : conversation.name, text: message.body, time: new Date(`${message.created_at}Z`).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), serverTime: message.created_at, mine: message.sender === currentUser.username });
+    const attachment = message.body.startsWith('__attachment__') ? JSON.parse(message.body.slice(15)) : null;
+    if (!exists) conversation.messages.push({ author: message.sender === currentUser.username ? state.profile.name : conversation.name, text: attachment ? attachment.name : message.body, attachment, time: new Date(`${message.created_at}Z`).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), serverTime: message.created_at, mine: message.sender === currentUser.username });
     conversation.preview = message.body; conversation.time = '刚刚';
   });
   persist(); renderList(); renderChat();
@@ -101,6 +103,39 @@ function sendMessage() {
   item.messages.push({ author: state.profile.name, text, time, mine: true });
   item.preview = text; item.time = '刚刚'; input.value = ''; input.style.height = '32px';
   persist(); renderList(); renderChat();
+}
+function insertText(text) {
+  const input = $('#messageInput'); const start = input.selectionStart; const end = input.selectionEnd;
+  input.value = `${input.value.slice(0, start)}${text}${input.value.slice(end)}`; input.focus(); input.selectionStart = input.selectionEnd = start + text.length;
+}
+function openStickerPicker() {
+  openModal('选择表情', `<div class="emoji-grid">${['😀','😄','😂','😊','😍','🤔','😎','😭','😡','👍','👏','🎉','❤️','✨','🔥','🙏','🌈','☕','🎵','🚀','💡','🙌','🤝','👋'].map(item => `<button class="emoji-choice" data-emoji="${item}">${item}</button>`).join('')}</div>`);
+  document.querySelectorAll('[data-emoji]').forEach(button => button.addEventListener('click', () => { insertText(button.dataset.emoji); closeModal(); }));
+}
+function openNoteEditor() {
+  const item = activeConversation(); if (!item) return;
+  openModal('设置备注', `<div class="modal-section"><label class="modal-label">联系人备注</label><input class="modal-input" id="noteInput" value="${escapeHtml(item.note || '')}" maxlength="40" placeholder="例如：大学同学" /><div class="modal-actions"><button class="modal-btn primary" id="saveNote">保存备注</button></div>`);
+  $('#saveNote').addEventListener('click', () => {
+    item.note = $('#noteInput').value.trim() || '暂无备注';
+    const contact = state.contacts.find(entry => entry.id === item.id || entry.username === String(item.handle || '').replace(/^@/, ''));
+    if (contact) contact.note = item.note;
+    persist(); renderChat(); closeModal(); showToast('备注已保存');
+  });
+}
+function sendFile(file) {
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) return showToast('文件不能超过 2 MB');
+  const reader = new FileReader();
+  reader.onload = () => {
+    const item = activeConversation(); const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const attachment = { name: file.name, size: file.size, type: file.type || 'application/octet-stream', dataUrl: reader.result };
+    const payload = { type: 'message', recipient: String(item.handle || '').replace(/^@/, ''), body: `__attachment__${JSON.stringify(attachment)}` };
+    if (!socket || socket.readyState !== WebSocket.OPEN) return showToast('实时连接未建立，暂时无法发送文件');
+    socket.send(JSON.stringify(payload));
+    item.messages.push({ author: state.profile.name, text: file.name, attachment, time, mine: true });
+    item.preview = `文件 · ${file.name}`; item.time = '刚刚'; persist(); renderList(); renderChat(); showToast('文件已发送');
+  };
+  reader.readAsDataURL(file);
 }
 function bindContactActions() {
   $('#findContact').addEventListener('click', findContact);
@@ -148,6 +183,7 @@ $('#sendBtn').addEventListener('click', sendMessage); $('#messageInput').addEven
 document.querySelectorAll('.filter-tab').forEach(tab => tab.addEventListener('click', () => { document.querySelectorAll('.filter-tab').forEach(node => node.classList.remove('active')); tab.classList.add('active'); state.filter = tab.dataset.filter; renderList(); }));
 document.querySelectorAll('.rail-btn[data-view]').forEach(button => button.addEventListener('click', () => { document.querySelectorAll('.rail-btn').forEach(node => node.classList.remove('active')); button.classList.add('active'); if (button.dataset.view === 'contacts') openContacts(); if (button.dataset.view === 'files') showToast('文件中心：可在聊天中使用附件按钮'); if (button.dataset.view === 'chats') closeModal(); }));
 $('#newChatBtn').addEventListener('click', openNewChat); $('#detailsClose').addEventListener('click', () => { $('#detailsPanel').style.display = 'none'; }); $('#moreBtn').addEventListener('click', () => { $('#detailsPanel').style.display = ''; showToast('已打开会话详情'); }); $('#callBtn').addEventListener('click', () => showToast('通话功能需要配置媒体服务')); $('#messageSearchBtn').addEventListener('click', () => { $('#searchInput').focus(); showToast('可搜索当前会话'); }); $('#settingsBtn').addEventListener('click', openSettings); $('.profile-mini').addEventListener('click', openProfile); $('#modalClose').addEventListener('click', closeModal); $('#modalBackdrop').addEventListener('click', event => { if (event.target === $('#modalBackdrop')) closeModal(); });
+$('#stickerBtn').addEventListener('click', openStickerPicker); $('#attachBtn').addEventListener('click', () => $('#fileInput').click()); $('#imageBtn').addEventListener('click', () => { $('#fileInput').accept = 'image/*'; $('#fileInput').click(); }); $('#fileInput').addEventListener('change', event => { sendFile(event.target.files[0]); event.target.value = ''; }); $('#detailsNote').addEventListener('click', openNoteEditor);
 $('#avatarInput').addEventListener('change', event => { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { state.profile.avatarUrl = reader.result; state.profile.avatar = ''; persist(); openProfile(); showToast('头像已更新'); }; reader.readAsDataURL(file); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); $('#searchInput').focus(); } });
 async function authenticate(mode, username, password, name) {
@@ -174,8 +210,9 @@ function connectSocket() {
       conversation = { ...item, preview: '', time: '刚刚', unread: 0, group: false, messages: [] };
       state.conversations.unshift(conversation);
     }
-    conversation.messages.push({ author: conversation.name, text: payload.body, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false });
-    conversation.preview = payload.body; conversation.time = '刚刚';
+    const attachment = payload.body.startsWith('__attachment__') ? JSON.parse(payload.body.slice(15)) : null;
+    conversation.messages.push({ author: conversation.name, text: attachment ? attachment.name : payload.body, attachment, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false });
+    conversation.preview = attachment ? `文件 · ${attachment.name}` : payload.body; conversation.time = '刚刚';
     if (state.activeId !== conversation.id) conversation.unread = (conversation.unread || 0) + 1;
     persist(); renderList(); renderChat();
   });
