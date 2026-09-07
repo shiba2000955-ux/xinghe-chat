@@ -43,7 +43,7 @@ function renderChat() {
   document.querySelectorAll('[data-message-index]').forEach(row => row.addEventListener('contextmenu', event => { event.preventDefault(); messageActions(Number(row.dataset.messageIndex)); }));
   $('#messageArea').scrollTop = $('#messageArea').scrollHeight;
 }
-function selectConversation(id) { state.activeId = id; const item = activeConversation(); item.unread = 0; persist(); renderList(); renderChat(); }
+function selectConversation(id) { state.activeId = id; const item = activeConversation(); item.unread = 0; persist(); renderList(); renderChat(); document.querySelector('.app-shell').classList.add('mobile-chat-open'); }
 function escapeHtml(text) { return String(text).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 function formatBytes(bytes) { if (!bytes) return '0 B'; if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`; return `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
 function showToast(message) { const toast = $('#toast'); toast.textContent = message; toast.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => toast.classList.remove('show'), 2400); }
@@ -206,7 +206,7 @@ function clearData() { if (!confirm('确定清空本机消息和联系人吗？'
 $('#sendBtn').addEventListener('click', sendMessage); $('#messageInput').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }); $('#messageInput').addEventListener('input', event => { event.target.style.height = '32px'; event.target.style.height = `${Math.min(event.target.scrollHeight, 115)}px`; }); $('#searchInput').addEventListener('input', event => { state.query = event.target.value; renderList(); });
 document.querySelectorAll('.filter-tab').forEach(tab => tab.addEventListener('click', () => { document.querySelectorAll('.filter-tab').forEach(node => node.classList.remove('active')); tab.classList.add('active'); state.filter = tab.dataset.filter; renderList(); }));
 document.querySelectorAll('.rail-btn[data-view]').forEach(button => button.addEventListener('click', () => { document.querySelectorAll('.rail-btn').forEach(node => node.classList.remove('active')); button.classList.add('active'); if (button.dataset.view === 'contacts') openContacts(); if (button.dataset.view === 'files') showToast('文件中心：可在聊天中使用附件按钮'); if (button.dataset.view === 'chats') closeModal(); }));
-$('#newChatBtn').addEventListener('click', openNewChat); $('#detailsClose').addEventListener('click', () => { $('#detailsPanel').style.display = 'none'; }); $('#moreBtn').addEventListener('click', () => { $('#detailsPanel').style.display = ''; showToast('已打开会话详情'); }); $('#callBtn').addEventListener('click', () => startCall(false)); $('#messageSearchBtn').addEventListener('click', () => { $('#searchInput').focus(); showToast('可搜索当前会话'); }); $('#settingsBtn').addEventListener('click', openSettings); $('.profile-mini').addEventListener('click', openProfile); $('#modalClose').addEventListener('click', closeModal); $('#modalBackdrop').addEventListener('click', event => { if (event.target === $('#modalBackdrop')) closeModal(); });
+$('#newChatBtn').addEventListener('click', openNewChat); $('#detailsClose').addEventListener('click', () => { $('#detailsPanel').style.display = 'none'; }); $('#moreBtn').addEventListener('click', () => { $('#detailsPanel').style.display = ''; showToast('已打开会话详情'); }); $('#callBtn').addEventListener('click', () => startCall(false)); $('#messageSearchBtn').addEventListener('click', () => { $('#searchInput').focus(); showToast('可搜索当前会话'); }); $('#settingsBtn').addEventListener('click', openSettings); $('.profile-mini').addEventListener('click', openProfile); $('#modalClose').addEventListener('click', closeModal); $('#modalBackdrop').addEventListener('click', event => { if (event.target === $('#modalBackdrop')) closeModal(); }); $('#mobileBackBtn').addEventListener('click', () => document.querySelector('.app-shell').classList.remove('mobile-chat-open'));
 $('#hangupBtn').addEventListener('click', endCall);
 $('#stickerBtn').addEventListener('click', openStickerPicker); $('#attachBtn').addEventListener('click', () => $('#fileInput').click()); $('#imageBtn').addEventListener('click', () => { $('#fileInput').accept = 'image/*'; $('#fileInput').click(); }); $('#fileInput').addEventListener('change', event => { sendFile(event.target.files[0]); event.target.value = ''; }); $('#detailsNote').addEventListener('click', openNoteEditor);
 $('#avatarInput').addEventListener('change', event => { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { state.profile.avatarUrl = reader.result; state.profile.avatar = ''; persist(); openProfile(); showToast('头像已更新'); }; reader.readAsDataURL(file); });
@@ -225,7 +225,8 @@ function connectSocket() {
   socket.addEventListener('open', () => { const status = document.querySelector('.sync-label'); if (status) status.textContent = '实时在线'; showToast('已连接到实时消息服务'); });
   socket.addEventListener('message', event => {
     const payload = JSON.parse(event.data);
-    if (payload.type !== 'message' || payload.sender === currentUser.username) return;
+    if (payload.sender === currentUser.username) return;
+    if (payload.type === 'call-signal') { handleCallSignal(payload); return; }
     const sender = String(payload.sender).replace(/^@/, '');
     const item = state.conversations.find(conversation => String(conversation.handle || '').replace(/^@/, '') === sender)
       || state.contacts.find(contact => String(contact.handle || '').replace(/^@/, '') === sender);
@@ -236,8 +237,9 @@ function connectSocket() {
       state.conversations.unshift(conversation);
     }
     if (payload.type === 'retract') { if (conversation.messages[payload.index]) conversation.messages[payload.index].deleted = true; persist(); renderChat(); return; }
-    if (payload.type === 'call-signal') { handleCallSignal(payload); return; }
-    const attachment = payload.body.startsWith('__attachment__') ? JSON.parse(payload.body.slice(15)) : null;
+    if (payload.type !== 'message' || !payload.body) return;
+    let attachment = null;
+    if (payload.body.startsWith('__attachment__')) { try { attachment = JSON.parse(payload.body.slice(15)); } catch { showToast('收到的附件无法读取'); } }
     conversation.messages.push({ author: conversation.name, text: attachment ? attachment.name : payload.body, quote: payload.quote, attachment, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false });
     conversation.preview = attachment ? `文件 · ${attachment.name}` : payload.body; conversation.time = '刚刚';
     if (state.activeId !== conversation.id) conversation.unread = (conversation.unread || 0) + 1;

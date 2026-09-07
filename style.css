@@ -67,6 +67,7 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 29px; letter-spacing: -.04em; } h2 
 .message-action-list { display: grid; gap: 8px; }
 .message-action-list button { padding: 12px 14px; text-align: left; border-radius: 10px; background: #f2f5f6; }
 .message-action-list button:hover { color: var(--blue); background: var(--blue-soft); }
+.mobile-back { display: none; }
 .call-overlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(18, 35, 43, .58); }
 .call-card { width: min(520px, calc(100vw - 40px)); padding: 28px; text-align: center; border-radius: 22px; background: white; box-shadow: var(--shadow); }
 .call-avatar { display: grid; place-items: center; width: 72px; height: 72px; margin: 0 auto 14px; color: #1d4a54; font-size: 27px; font-weight: 700; border-radius: 22px; background: #d7e9e2; }
@@ -74,6 +75,33 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 29px; letter-spacing: -.04em; } h2 
 .call-video-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
 .call-video-grid video { width: 100%; min-height: 140px; object-fit: cover; border-radius: 12px; background: #182b35; }
 .call-actions { display: flex; justify-content: center; gap: 10px; }
+@media (max-width: 700px) {
+  body { min-width: 0; }
+  .app-shell { grid-template-columns: 62px minmax(0, 1fr); }
+  .sidebar { min-width: 0; }
+  .sidebar-head { padding: 28px 16px 18px; }
+  .sidebar-head h1 { font-size: 26px; }
+  .search-wrap { margin: 0 12px; }
+  .filter-tabs { gap: 14px; padding: 20px 16px 12px; }
+  .conversation { grid-template-columns: 42px minmax(0, 1fr) auto; gap: 9px; padding: 13px 8px; }
+  .conversation-preview { max-width: 100%; }
+  .details-panel { display: none; }
+  .chat-panel { display: none; min-width: 0; }
+  .app-shell.mobile-chat-open .sidebar { display: none; }
+  .app-shell.mobile-chat-open .chat-panel { display: flex; grid-column: 2; }
+  .chat-head { min-height: 78px; padding: 14px 10px; }
+  .chat-person { gap: 8px; min-width: 0; }
+  .chat-person h2 { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-actions { gap: 0; }
+  .chat-actions .icon-btn { width: 30px; }
+  .mobile-back { display: grid; place-items: center; width: 28px; height: 34px; color: var(--blue); font-size: 30px; background: transparent; }
+  .message-area { padding: 20px 12px; }
+  .bubble-wrap { max-width: 84%; }
+  .composer { gap: 5px; margin: 0 9px; }
+  .composer-tools { gap: 0; }
+  .tool-btn { width: 27px; }
+  .composer-hint { padding-right: 10px; }
+}
 
 .file-bubble {
   display: flex;
