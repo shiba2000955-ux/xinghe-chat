@@ -9,3 +9,5 @@ services:
     envVars:
       - key: NOVA_DB_PATH
         value: /tmp/nova.db
+      - key: NOVA_ADMIN_KEY
+        sync: false

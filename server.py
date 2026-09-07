@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aiohttp import web, WSMsgType
@@ -21,6 +22,7 @@ DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
 PORT = int(os.environ.get('PORT', '5173'))
 CLIENTS = {}
 TOKEN_SECRET = os.environ.get('NOVA_TOKEN_SECRET', 'nova-development-secret')
+ADMIN_KEY = os.environ.get('NOVA_ADMIN_KEY', '').strip()
 
 
 class PostgresConnection:
@@ -69,6 +71,9 @@ def db():
             );
         ''')
         connection.commit()
+        connection.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip TEXT')
+        connection.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ')
+        connection.commit()
         return connection
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
@@ -97,6 +102,15 @@ def db():
             UNIQUE(sender_id, recipient_id)
         );
     ''')
+    for statement in (
+        'ALTER TABLE users ADD COLUMN last_login_ip TEXT',
+        'ALTER TABLE users ADD COLUMN last_login_at TEXT',
+    ):
+        try:
+            connection.execute(statement)
+        except sqlite3.OperationalError as error:
+            if 'duplicate column name' not in str(error).lower():
+                raise
     return connection
 
 
@@ -180,10 +194,31 @@ async def login(request):
     username = str(payload.get('username', '')).strip().lower()
     connection = db()
     user = connection.execute('SELECT * FROM users WHERE username = ? AND password_hash = ?', (username, password_hash(str(payload.get('password', ''))))).fetchone()
+    if user:
+        now = datetime.now(timezone.utc).isoformat()
+        ip = request.headers.get('X-Forwarded-For', request.remote or '').split(',')[0].strip()
+        connection.execute('UPDATE users SET last_login_ip = ?, last_login_at = ? WHERE id = ?', (ip, now, user['id']))
+        connection.commit()
     connection.close()
     if not user:
         return await json_response({'error': '用户名或密码错误'}, 401)
     return await json_response({'token': token_for(user), 'user': public_user(user)})
+
+
+def admin_allowed(request):
+    return bool(ADMIN_KEY) and hmac.compare_digest(request.headers.get('X-Admin-Key', ''), ADMIN_KEY)
+
+
+async def admin_users(request):
+    if not admin_allowed(request):
+        return await json_response({'error': '管理员认证失败'}, 401)
+    connection = db()
+    rows = connection.execute(
+        'SELECT id, username, display_name, created_at, last_login_ip, last_login_at '
+        'FROM users ORDER BY id DESC'
+    ).fetchall()
+    connection.close()
+    return await json_response({'users': [dict(row) for row in rows], 'passwords': 'never returned'})
 
 
 async def history(request):
@@ -360,6 +395,10 @@ async def index(request):
     return web.FileResponse(ROOT / 'index.html')
 
 
+async def admin_page(request):
+    return web.FileResponse(ROOT / 'admin.html')
+
+
 @web.middleware
 async def json_errors(request, handler):
     try:
@@ -373,6 +412,7 @@ async def json_errors(request, handler):
 app = web.Application(client_max_size=8 * 1024 * 1024, middlewares=[json_errors])
 app.router.add_post('/api/register', register)
 app.router.add_post('/api/login', login)
+app.router.add_get('/admin/api/users', admin_users)
 app.router.add_get('/api/history', history)
 app.router.add_get('/api/users', find_users)
 app.router.add_get('/api/contacts', list_contacts)
@@ -380,6 +420,7 @@ app.router.add_post('/api/friend-requests', create_friend_request)
 app.router.add_post('/api/friend-requests/{request_id}', update_friend_request)
 app.router.add_get('/ws', websocket)
 app.router.add_get('/health', health)
+app.router.add_get('/admin', admin_page)
 app.router.add_get('/', index)
 app.router.add_static('/', ROOT, show_index=True)
 

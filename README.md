@@ -27,3 +27,7 @@ Render 免费实例的本地 SQLite 文件会在实例重启或重新部署时�
 2. 在 Render 选择 **New > Blueprint**，连接该仓库并选择 `render.yaml`。
 3. 点击部署，等待构建完成后使用 Render 分配的 `https://...onrender.com` 地址。
 4. 生产环境建议绑定 HTTPS 域名并接入 Postgres。
+
+## 管理后台
+
+设置 Render 环境变量 `NOVA_ADMIN_KEY` 后，访问 `/admin`，输入该密钥即可查看会员用户名、昵称、注册时间、最近登录 IP 和最近登录时间。后台不会返回密码或密码哈希；不要把管理员密钥写入代码或发到聊天中。
