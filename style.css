@@ -67,6 +67,11 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 29px; letter-spacing: -.04em; } h2 
 .message-action-list { display: grid; gap: 8px; }
 .message-action-list button { padding: 12px 14px; text-align: left; border-radius: 10px; background: #f2f5f6; }
 .message-action-list button:hover { color: var(--blue); background: var(--blue-soft); }
+.voice-btn.recording { color: white; background: var(--coral); animation: voice-pulse 1s infinite alternate; }
+@keyframes voice-pulse { from { box-shadow: 0 0 0 0 rgba(237,118,95,.25); } to { box-shadow: 0 0 0 7px rgba(237,118,95,0); } }
+.voice-bubble { display: flex; align-items: center; gap: 8px; min-width: 180px; padding: 7px 10px; border-radius: 14px; background: white; }
+.mine .voice-bubble { background: var(--blue); }
+.voice-bubble audio { width: 155px; height: 32px; }
 .mobile-back { display: none; }
 .call-overlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(18, 35, 43, .58); }
 .call-card { width: min(520px, calc(100vw - 40px)); padding: 28px; text-align: center; border-radius: 22px; background: white; box-shadow: var(--shadow); }

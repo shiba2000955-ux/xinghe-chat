@@ -19,6 +19,9 @@ let socket = null;
 let quoteMessage = null;
 let peerConnection = null;
 let localStream = null;
+let voiceRecorder = null;
+let voiceChunks = [];
+let voiceStartedAt = 0;
 const $ = selector => document.querySelector(selector);
 const list = $('#conversationList');
 function load(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } }
@@ -34,18 +37,50 @@ function renderList() {
   document.querySelectorAll('.conversation').forEach(item => item.addEventListener('click', () => selectConversation(item.dataset.id)));
   $('#allCount').textContent = state.conversations.length; $('#unreadCount').textContent = state.conversations.reduce((total, item) => total + (item.unread ? 1 : 0), 0);
 }
+async function toggleVoiceRecording() {
+  const button = $('#voiceBtn');
+  if (voiceRecorder && voiceRecorder.state === 'recording') { voiceRecorder.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) return showToast('当前设备不支持语音录制');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
+    voiceChunks = []; voiceStartedAt = Date.now();
+    voiceRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    voiceRecorder.ondataavailable = event => { if (event.data.size) voiceChunks.push(event.data); };
+    voiceRecorder.onstop = async () => {
+      stream.getTracks().forEach(track => track.stop()); button.classList.remove('recording'); button.textContent = '🎙';
+      const duration = Math.max(1, Math.round((Date.now() - voiceStartedAt) / 1000));
+      if (duration > 60) return showToast('语音最长 60 秒');
+      const blob = new Blob(voiceChunks, { type: voiceRecorder.mimeType || 'audio/webm' });
+      if (blob.size > 2 * 1024 * 1024) return showToast('语音文件不能超过 2 MB');
+      const reader = new FileReader();
+      reader.onload = () => sendVoice({ dataUrl: reader.result, duration });
+      reader.readAsDataURL(blob);
+    };
+    voiceRecorder.start(); button.classList.add('recording'); button.textContent = '■'; showToast('正在录音，再点一次结束');
+  } catch { showToast('请允许浏览器使用麦克风'); }
+}
+function sendVoice(voice) {
+  const item = activeConversation(); if (!item) return;
+  const recipient = String(item.handle || '').replace(/^@/, '');
+  const body = `__voice__${JSON.stringify(voice)}`;
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'message', recipient, body }));
+  const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  item.messages.push({ author: state.profile.name, text: '语音消息', voice, time, mine: true }); item.preview = '语音消息'; item.time = '刚刚'; persist(); renderList(); renderChat();
+}
 function renderChat() {
   const item = activeConversation(); if (!item) return;
   ['activeAvatar', 'detailsAvatar'].forEach(id => { const node = $(`#${id}`); node.innerHTML = renderAvatar(item); node.className = `${avatarClass(item)} ${id === 'activeAvatar' ? 'avatar-large' : 'details-avatar avatar-xl'}`; });
   $('#activeName').textContent = item.name; $('#activeStatus').innerHTML = item.online ? '<span class="online-dot"></span> 在线，回复很快' : `<span>${escapeHtml(item.note)}</span>`;
   $('#detailsName').textContent = item.name; $('#detailsHandle').textContent = `${item.handle} · ${item.group ? item.note : '武汉'}`; $('#detailsNote').textContent = item.note;
-  $('#messageArea').innerHTML = `<div class="date-divider">今天</div>${item.messages.map((message, index) => `<div class="message-row ${message.mine ? 'mine' : ''}" data-message-index="${index}">${message.mine ? '' : `<div class="${avatarClass(item)} message-avatar">${renderAvatar(item)}</div>`}<div class="bubble-wrap">${message.author && !message.mine ? `<div class="message-author">${escapeHtml(message.author)}</div>` : ''}${message.deleted ? '<div class="bubble deleted-message">这条消息已撤回</div>' : message.attachment ? `<a class="file-bubble" href="${message.attachment.dataUrl || '#'}" download="${escapeHtml(message.attachment.name)}">📎 <strong>${escapeHtml(message.attachment.name)}</strong><small>${formatBytes(message.attachment.size)} · 下载文件</small></a>` : `<div class="bubble">${message.quote ? `<small class="quoted-message">引用：${escapeHtml(message.quote.text)}</small>` : ''}${escapeHtml(message.text).replace(/\n/g, '<br>')}</div>`}<div class="message-time">${message.time}${message.mine ? ' · 已送达' : ''}</div></div></div>`).join('')}`;
+  $('#messageArea').innerHTML = `<div class="date-divider">今天</div>${item.messages.map((message, index) => `<div class="message-row ${message.mine ? 'mine' : ''}" data-message-index="${index}">${message.mine ? '' : `<div class="${avatarClass(item)} message-avatar">${renderAvatar(item)}</div>`}<div class="bubble-wrap">${message.author && !message.mine ? `<div class="message-author">${escapeHtml(message.author)}</div>` : ''}${message.deleted ? '<div class="bubble deleted-message">这条消息已撤回</div>' : message.voice ? renderVoice(message.voice) : message.attachment ? `<a class="file-bubble" href="${message.attachment.dataUrl || '#'}" download="${escapeHtml(message.attachment.name)}">📎 <strong>${escapeHtml(message.attachment.name)}</strong><small>${formatBytes(message.attachment.size)} · 下载文件</small></a>` : `<div class="bubble">${message.quote ? `<small class="quoted-message">引用：${escapeHtml(message.quote.text)}</small>` : ''}${escapeHtml(message.text).replace(/\n/g, '<br>')}</div>`}<div class="message-time">${message.time}${message.mine ? ' · 已送达' : ''}</div></div></div>`).join('')}`;
   document.querySelectorAll('[data-message-index]').forEach(row => row.addEventListener('contextmenu', event => { event.preventDefault(); messageActions(Number(row.dataset.messageIndex)); }));
   $('#messageArea').scrollTop = $('#messageArea').scrollHeight;
 }
 function selectConversation(id) { state.activeId = id; const item = activeConversation(); item.unread = 0; persist(); renderList(); renderChat(); document.querySelector('.app-shell').classList.add('mobile-chat-open'); }
 function escapeHtml(text) { return String(text).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 function formatBytes(bytes) { if (!bytes) return '0 B'; if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`; return `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
+function renderVoice(voice) { return `<div class="voice-bubble">🎙 <audio controls preload="metadata" src="${voice.dataUrl}"></audio><small>${voice.duration}s</small></div>`; }
 function showToast(message) { const toast = $('#toast'); toast.textContent = message; toast.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => toast.classList.remove('show'), 2400); }
 async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}), 'X-Auth-Token': authToken };
@@ -89,8 +124,12 @@ async function loadHistory() {
       state.conversations.unshift(conversation);
     }
     const exists = conversation.messages.some(entry => entry.text === message.body && entry.serverTime === message.created_at);
-    const attachment = message.body.startsWith('__attachment__') ? JSON.parse(message.body.slice(15)) : null;
-    if (!exists) conversation.messages.push({ author: message.sender === currentUser.username ? state.profile.name : conversation.name, text: attachment ? attachment.name : message.body, attachment, time: new Date(`${message.created_at}Z`).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), serverTime: message.created_at, mine: message.sender === currentUser.username });
+    let attachment = null; let voice = null;
+    try {
+      if (message.body.startsWith('__attachment__')) attachment = JSON.parse(message.body.slice(15));
+      if (message.body.startsWith('__voice__')) voice = JSON.parse(message.body.slice(9));
+    } catch { showToast('历史附件无法读取'); }
+    if (!exists) conversation.messages.push({ author: message.sender === currentUser.username ? state.profile.name : conversation.name, text: voice ? '语音消息' : attachment ? attachment.name : message.body, attachment, voice, time: new Date(`${message.created_at}Z`).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), serverTime: message.created_at, mine: message.sender === currentUser.username });
     conversation.preview = message.body; conversation.time = '刚刚';
   });
   persist(); renderList(); renderChat();
@@ -203,7 +242,7 @@ function saveProfile() { state.profile.name = $('#profileName').value.trim() || 
 function openSettings() { const settings = state.settings; openModal('设置', `<div class="modal-section"><div class="setting-row"><div><span>新消息通知</span><small>收到好友消息时提醒</small></div><button class="switch ${settings.notifications ? 'on' : ''}" data-setting="notifications"></button></div><div class="setting-row"><div><span>提示音</span><small>发送和接收消息音效</small></div><button class="switch ${settings.sounds ? 'on' : ''}" data-setting="sounds"></button></div></div><div class="modal-section"><label class="modal-label">网络服务地址</label><input class="modal-input" id="networkUrl" value="${escapeHtml(settings.networkUrl)}" placeholder="https://your-server.example.com" /><div class="network-badge ${settings.networkUrl ? '' : 'offline'}"><span class="status-dot"></span>${settings.networkUrl ? '已配置同步地址' : '当前为本机离线模式'}</div></div><div class="modal-actions"><button class="modal-btn" id="exportData">导出数据</button><button class="modal-btn danger" id="clearData">清空本机数据</button><button class="modal-btn primary" id="saveSettings">保存设置</button></div>`); document.querySelectorAll('[data-setting]').forEach(button => button.addEventListener('click', () => { const key = button.dataset.setting; settings[key] = !settings[key]; button.classList.toggle('on', settings[key]); })); $('#saveSettings').addEventListener('click', () => { settings.networkUrl = $('#networkUrl').value.trim(); persist(); closeModal(); showToast(settings.networkUrl ? '网络同步地址已保存' : '设置已保存'); }); $('#exportData').addEventListener('click', exportData); $('#clearData').addEventListener('click', clearData); }
 function exportData() { const blob = new Blob([JSON.stringify({ profile: state.profile, contacts: state.contacts, conversations: state.conversations }, null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'nova-messenger-backup.json'; link.click(); URL.revokeObjectURL(link.href); showToast('数据备份已下载'); }
 function clearData() { if (!confirm('确定清空本机消息和联系人吗？')) return; ['nova-conversations', 'nova-contacts', 'nova-profile', 'nova-settings'].forEach(key => localStorage.removeItem(key)); location.reload(); }
-$('#sendBtn').addEventListener('click', sendMessage); $('#messageInput').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }); $('#messageInput').addEventListener('input', event => { event.target.style.height = '32px'; event.target.style.height = `${Math.min(event.target.scrollHeight, 115)}px`; }); $('#searchInput').addEventListener('input', event => { state.query = event.target.value; renderList(); });
+$('#sendBtn').addEventListener('click', sendMessage); $('#voiceBtn').addEventListener('click', toggleVoiceRecording); $('#messageInput').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }); $('#messageInput').addEventListener('input', event => { event.target.style.height = '32px'; event.target.style.height = `${Math.min(event.target.scrollHeight, 115)}px`; }); $('#searchInput').addEventListener('input', event => { state.query = event.target.value; renderList(); });
 document.querySelectorAll('.filter-tab').forEach(tab => tab.addEventListener('click', () => { document.querySelectorAll('.filter-tab').forEach(node => node.classList.remove('active')); tab.classList.add('active'); state.filter = tab.dataset.filter; renderList(); }));
 document.querySelectorAll('.rail-btn[data-view]').forEach(button => button.addEventListener('click', () => { document.querySelectorAll('.rail-btn').forEach(node => node.classList.remove('active')); button.classList.add('active'); if (button.dataset.view === 'contacts') openContacts(); if (button.dataset.view === 'files') showToast('文件中心：可在聊天中使用附件按钮'); if (button.dataset.view === 'chats') closeModal(); }));
 $('#newChatBtn').addEventListener('click', openNewChat); $('#detailsClose').addEventListener('click', () => { $('#detailsPanel').style.display = 'none'; }); $('#moreBtn').addEventListener('click', () => { $('#detailsPanel').style.display = ''; showToast('已打开会话详情'); }); $('#callBtn').addEventListener('click', () => startCall(false)); $('#messageSearchBtn').addEventListener('click', () => { $('#searchInput').focus(); showToast('可搜索当前会话'); }); $('#settingsBtn').addEventListener('click', openSettings); $('.profile-mini').addEventListener('click', openProfile); $('#modalClose').addEventListener('click', closeModal); $('#modalBackdrop').addEventListener('click', event => { if (event.target === $('#modalBackdrop')) closeModal(); }); $('#mobileBackBtn').addEventListener('click', () => document.querySelector('.app-shell').classList.remove('mobile-chat-open'));
@@ -238,10 +277,13 @@ function connectSocket() {
     }
     if (payload.type === 'retract') { if (conversation.messages[payload.index]) conversation.messages[payload.index].deleted = true; persist(); renderChat(); return; }
     if (payload.type !== 'message' || !payload.body) return;
-    let attachment = null;
-    if (payload.body.startsWith('__attachment__')) { try { attachment = JSON.parse(payload.body.slice(15)); } catch { showToast('收到的附件无法读取'); } }
-    conversation.messages.push({ author: conversation.name, text: attachment ? attachment.name : payload.body, quote: payload.quote, attachment, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false });
-    conversation.preview = attachment ? `文件 · ${attachment.name}` : payload.body; conversation.time = '刚刚';
+    let attachment = null; let voice = null;
+    try {
+      if (payload.body.startsWith('__attachment__')) attachment = JSON.parse(payload.body.slice(15));
+      if (payload.body.startsWith('__voice__')) voice = JSON.parse(payload.body.slice(9));
+    } catch { showToast('收到的附件无法读取'); }
+    conversation.messages.push({ author: conversation.name, text: voice ? '语音消息' : attachment ? attachment.name : payload.body, quote: payload.quote, attachment, voice, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false });
+    conversation.preview = voice ? '语音消息' : attachment ? `文件 · ${attachment.name}` : payload.body; conversation.time = '刚刚';
     if (state.activeId !== conversation.id) conversation.unread = (conversation.unread || 0) + 1;
     persist(); renderList(); renderChat();
   });
