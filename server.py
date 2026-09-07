@@ -9,15 +9,65 @@ import sqlite3
 from pathlib import Path
 
 from aiohttp import web, WSMsgType
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError:
+    psycopg2 = None
 
 ROOT = Path(__file__).parent
 DB_PATH = Path(os.environ.get('NOVA_DB_PATH', ROOT / 'nova.db'))
+DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
 PORT = int(os.environ.get('PORT', '5173'))
 CLIENTS = {}
 TOKEN_SECRET = os.environ.get('NOVA_TOKEN_SECRET', 'nova-development-secret')
 
 
+class PostgresConnection:
+    def __init__(self, url):
+        self.connection = psycopg2.connect(url, sslmode='require')
+        self.connection.autocommit = False
+
+    def execute(self, sql, params=()):
+        cursor = self.connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(sql.replace('?', '%s'), params)
+        return cursor
+
+    def executescript(self, script):
+        self.connection.cursor().execute(script)
+
+    def commit(self):
+        self.connection.commit()
+
+    def close(self):
+        self.connection.close()
+
+
 def db():
+    if DATABASE_URL:
+        if psycopg2 is None:
+            raise RuntimeError('DATABASE_URL 已配置，但缺少 psycopg2 依赖')
+        connection = PostgresConnection(DATABASE_URL)
+        connection.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGSERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL, display_name TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id BIGSERIAL PRIMARY KEY, sender TEXT NOT NULL,
+                recipient TEXT NOT NULL, body TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS friend_requests (
+                id BIGSERIAL PRIMARY KEY, sender_id BIGINT NOT NULL,
+                recipient_id BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(sender_id, recipient_id)
+            );
+        ''')
+        connection.commit()
+        return connection
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     connection.execute('PRAGMA journal_mode=WAL')
@@ -103,10 +153,15 @@ async def register(request):
         return await json_response({'error': '用户名至少 3 位，密码至少 6 位'}, 400)
     connection = db()
     try:
-        cursor = connection.execute('INSERT INTO users(username, password_hash, display_name) VALUES (?, ?, ?)', (username, password_hash(password), display_name))
+        cursor = connection.execute(
+            'INSERT INTO users(username, password_hash, display_name) VALUES (?, ?, ?) '
+            'RETURNING id, username, password_hash, display_name',
+            (username, password_hash(password), display_name)
+        )
+        user = cursor.fetchone()
+        cursor.close()
         connection.commit()
-        user = connection.execute('SELECT * FROM users WHERE id = ?', (cursor.lastrowid,)).fetchone()
-    except sqlite3.IntegrityError:
+    except (sqlite3.IntegrityError, psycopg2.IntegrityError if psycopg2 else sqlite3.IntegrityError):
         connection.close()
         return await json_response({'error': '用户名已经存在'}, 409)
     connection.close()
