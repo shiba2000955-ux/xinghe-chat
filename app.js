@@ -68,9 +68,38 @@ async function syncContacts() {
   }));
   save('nova-contacts', state.contacts);
 }
+async function loadHistory() {
+  if (!authToken || !currentUser) return;
+  const result = await apiFetch('/api/history');
+  result.messages.forEach(message => {
+    const other = message.sender === currentUser.username ? message.recipient : message.sender;
+    const item = state.conversations.find(conversation => String(conversation.handle || '').replace(/^@/, '') === other)
+      || state.contacts.find(contact => String(contact.handle || '').replace(/^@/, '') === other);
+    if (!item) return;
+    let conversation = state.conversations.find(entry => entry.id === item.id);
+    if (!conversation) {
+      conversation = { ...item, preview: '', time: '刚刚', unread: 0, group: false, messages: [] };
+      state.conversations.unshift(conversation);
+    }
+    const exists = conversation.messages.some(entry => entry.text === message.body && entry.serverTime === message.created_at);
+    if (!exists) conversation.messages.push({ author: message.sender === currentUser.username ? state.profile.name : conversation.name, text: message.body, time: new Date(`${message.created_at}Z`).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), serverTime: message.created_at, mine: message.sender === currentUser.username });
+    conversation.preview = message.body; conversation.time = '刚刚';
+  });
+  persist(); renderList(); renderChat();
+}
 function openModal(title, body) { $('#modalTitle').textContent = title; $('#modalBody').innerHTML = body; $('#modalBackdrop').hidden = false; }
 function closeModal() { $('#modalBackdrop').hidden = true; }
-function sendMessage() { const input = $('#messageInput'); const text = input.value.trim(); if (!text) return; const item = activeConversation(); const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); if (socket && socket.readyState === WebSocket.OPEN) { socket.send(JSON.stringify({ type: 'message', recipient: item.handle, body: text })); } else { item.messages.push({ author: state.profile.name, text, time, mine: true }); } item.preview = text; item.time = '刚刚'; input.value = ''; input.style.height = '32px'; persist(); renderList(); renderChat(); }
+function sendMessage() {
+  const input = $('#messageInput'); const text = input.value.trim(); if (!text) return;
+  const item = activeConversation(); const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const recipient = String(item.handle || '').replace(/^@/, '');
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'message', recipient, body: text }));
+  }
+  item.messages.push({ author: state.profile.name, text, time, mine: true });
+  item.preview = text; item.time = '刚刚'; input.value = ''; input.style.height = '32px';
+  persist(); renderList(); renderChat();
+}
 function bindContactActions() {
   $('#findContact').addEventListener('click', findContact);
   $('#contactSearch').addEventListener('keydown', event => { if (event.key === 'Enter') findContact(); });
@@ -91,7 +120,8 @@ function bindContactActions() {
     } catch (error) { showToast(error.message); }
   }));
 }
-function openContacts() {
+async function openContacts() {
+  try { await syncContacts(); } catch (error) { showToast(error.message); }
   openModal('联系人', `<div class="modal-section"><label class="modal-label">搜索用户或账号 ID</label><input class="modal-input" id="contactSearch" placeholder="例如：someone" /><div class="modal-actions"><button class="modal-btn primary" id="findContact">查找并添加</button></div></div><div class="modal-section"><label class="modal-label">我的联系人</label><div id="contactRows">${renderContactRows()}</div></div>`);
   bindContactActions();
 }
@@ -121,13 +151,29 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') clos
 async function authenticate(mode, username, password, name) {
   const response = await fetch(`/api/${mode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, name }) });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || '登录失败');
-  authToken = result.token; currentUser = result.user; localStorage.setItem('nova-token', authToken); localStorage.setItem('nova-user', JSON.stringify(currentUser)); state.profile.name = currentUser.name; state.profile.handle = `@${currentUser.username}`; persist(); await syncContacts(); connectSocket(); $('#authScreen').hidden = true;
+  authToken = result.token; currentUser = result.user; localStorage.setItem('nova-token', authToken); localStorage.setItem('nova-user', JSON.stringify(currentUser)); state.profile.name = currentUser.name; state.profile.handle = `@${currentUser.username}`; persist(); await syncContacts(); await loadHistory(); connectSocket(); $('#authScreen').hidden = true;
 }
 function connectSocket() {
   if (!authToken) return;
   socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws?token=${encodeURIComponent(authToken)}`);
   socket.addEventListener('open', () => { const status = document.querySelector('.sync-label'); if (status) status.textContent = '实时在线'; showToast('已连接到实时消息服务'); });
-  socket.addEventListener('message', event => { const payload = JSON.parse(event.data); if (payload.type !== 'message' || payload.sender === currentUser.username) return; const item = state.conversations.find(conversation => conversation.handle === payload.sender) || state.conversations[0]; item.messages.push({ author: item.name, text: payload.body, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false }); item.preview = payload.body; item.time = '刚刚'; if (state.activeId !== item.id) item.unread = (item.unread || 0) + 1; persist(); renderList(); renderChat(); });
+  socket.addEventListener('message', event => {
+    const payload = JSON.parse(event.data);
+    if (payload.type !== 'message' || payload.sender === currentUser.username) return;
+    const sender = String(payload.sender).replace(/^@/, '');
+    const item = state.conversations.find(conversation => String(conversation.handle || '').replace(/^@/, '') === sender)
+      || state.contacts.find(contact => String(contact.handle || '').replace(/^@/, '') === sender);
+    if (!item) return;
+    let conversation = state.conversations.find(entry => entry.id === item.id);
+    if (!conversation) {
+      conversation = { ...item, preview: '', time: '刚刚', unread: 0, group: false, messages: [] };
+      state.conversations.unshift(conversation);
+    }
+    conversation.messages.push({ author: conversation.name, text: payload.body, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false });
+    conversation.preview = payload.body; conversation.time = '刚刚';
+    if (state.activeId !== conversation.id) conversation.unread = (conversation.unread || 0) + 1;
+    persist(); renderList(); renderChat();
+  });
   socket.addEventListener('close', () => { const status = document.querySelector('.sync-label'); if (status) status.textContent = '连接断开'; });
 }
 function initAuth() {
@@ -135,6 +181,6 @@ function initAuth() {
   const nameLabel = $('.auth-name-label'); const nameInput = $('.auth-name-input');
   document.querySelectorAll('[data-auth-mode]').forEach(tab => tab.addEventListener('click', () => { mode = tab.dataset.authMode; document.querySelectorAll('[data-auth-mode]').forEach(node => node.classList.toggle('active', node === tab)); const register = mode === 'register'; nameLabel.hidden = !register; nameInput.hidden = !register; $('#authSubmit').textContent = register ? '注册并进入' : '登录并进入'; }));
   $('#authForm').addEventListener('submit', async event => { event.preventDefault(); $('#authError').textContent = ''; $('#authSubmit').disabled = true; try { await authenticate(mode, $('#authUsername').value.trim(), $('#authPassword').value, $('#authName').value.trim()); } catch (error) { $('#authError').textContent = error.message; } finally { $('#authSubmit').disabled = false; } });
-  if (authToken && currentUser) { $('#authScreen').hidden = true; syncContacts().catch(() => {}); connectSocket(); } else { $('#authScreen').hidden = false; }
+  if (authToken && currentUser) { $('#authScreen').hidden = true; syncContacts().then(loadHistory).catch(() => {}); connectSocket(); } else { $('#authScreen').hidden = false; }
 }
 renderList(); renderChat(); initAuth();

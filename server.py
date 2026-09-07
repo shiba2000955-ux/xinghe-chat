@@ -129,7 +129,11 @@ async def history(request):
     if not user:
         return await json_response({'error': '未登录'}, 401)
     connection = db()
-    rows = connection.execute('SELECT sender, recipient, body, created_at FROM messages ORDER BY id DESC LIMIT 100').fetchall()
+    rows = connection.execute(
+        'SELECT sender, recipient, body, created_at FROM messages '
+        'WHERE sender = ? OR recipient = ? ORDER BY id DESC LIMIT 100',
+        (user['username'], user['username'])
+    ).fetchall()
     connection.close()
     return await json_response({'messages': [dict(row) for row in reversed(rows)]})
 
@@ -232,6 +236,8 @@ async def update_friend_request(request):
 async def broadcast(payload):
     dead = []
     for token, session in CLIENTS.items():
+        if session['user']['username'] not in {payload.get('sender'), payload.get('recipient')}:
+            continue
         socket = session.get('socket')
         if socket and not socket.closed:
             try:
