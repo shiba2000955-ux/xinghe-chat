@@ -16,6 +16,9 @@ const state = { conversations: load('nova-conversations', seedConversations), co
 let currentUser = JSON.parse(localStorage.getItem('nova-user') || 'null');
 let authToken = localStorage.getItem('nova-token') || '';
 let socket = null;
+let quoteMessage = null;
+let peerConnection = null;
+let localStream = null;
 const $ = selector => document.querySelector(selector);
 const list = $('#conversationList');
 function load(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } }
@@ -36,7 +39,8 @@ function renderChat() {
   ['activeAvatar', 'detailsAvatar'].forEach(id => { const node = $(`#${id}`); node.innerHTML = renderAvatar(item); node.className = `${avatarClass(item)} ${id === 'activeAvatar' ? 'avatar-large' : 'details-avatar avatar-xl'}`; });
   $('#activeName').textContent = item.name; $('#activeStatus').innerHTML = item.online ? '<span class="online-dot"></span> 在线，回复很快' : `<span>${escapeHtml(item.note)}</span>`;
   $('#detailsName').textContent = item.name; $('#detailsHandle').textContent = `${item.handle} · ${item.group ? item.note : '武汉'}`; $('#detailsNote').textContent = item.note;
-  $('#messageArea').innerHTML = `<div class="date-divider">今天</div>${item.messages.map(message => `<div class="message-row ${message.mine ? 'mine' : ''}">${message.mine ? '' : `<div class="${avatarClass(item)} message-avatar">${renderAvatar(item)}</div>`}<div class="bubble-wrap">${message.mine ? '' : `<div class="message-author">${escapeHtml(message.author)}</div>`}${message.attachment ? `<a class="file-bubble" href="${message.attachment.dataUrl || '#'}" download="${escapeHtml(message.attachment.name)}">📎 <strong>${escapeHtml(message.attachment.name)}</strong><small>${formatBytes(message.attachment.size)} · 下载文件</small></a>` : `<div class="bubble">${escapeHtml(message.text).replace(/\n/g, '<br>')}</div>`}<div class="message-time">${message.time}${message.mine ? ' · 已送达' : ''}</div></div></div>`).join('')}`;
+  $('#messageArea').innerHTML = `<div class="date-divider">今天</div>${item.messages.map((message, index) => `<div class="message-row ${message.mine ? 'mine' : ''}" data-message-index="${index}">${message.mine ? '' : `<div class="${avatarClass(item)} message-avatar">${renderAvatar(item)}</div>`}<div class="bubble-wrap">${message.author && !message.mine ? `<div class="message-author">${escapeHtml(message.author)}</div>` : ''}${message.deleted ? '<div class="bubble deleted-message">这条消息已撤回</div>' : message.attachment ? `<a class="file-bubble" href="${message.attachment.dataUrl || '#'}" download="${escapeHtml(message.attachment.name)}">📎 <strong>${escapeHtml(message.attachment.name)}</strong><small>${formatBytes(message.attachment.size)} · 下载文件</small></a>` : `<div class="bubble">${message.quote ? `<small class="quoted-message">引用：${escapeHtml(message.quote.text)}</small>` : ''}${escapeHtml(message.text).replace(/\n/g, '<br>')}</div>`}<div class="message-time">${message.time}${message.mine ? ' · 已送达' : ''}</div></div></div>`).join('')}`;
+  document.querySelectorAll('[data-message-index]').forEach(row => row.addEventListener('contextmenu', event => { event.preventDefault(); messageActions(Number(row.dataset.messageIndex)); }));
   $('#messageArea').scrollTop = $('#messageArea').scrollHeight;
 }
 function selectConversation(id) { state.activeId = id; const item = activeConversation(); item.unread = 0; persist(); renderList(); renderChat(); }
@@ -98,12 +102,32 @@ function sendMessage() {
   const item = activeConversation(); const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   const recipient = String(item.handle || '').replace(/^@/, '');
   if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: 'message', recipient, body: text }));
+    socket.send(JSON.stringify({ type: 'message', recipient, body: text, quote: quoteMessage }));
   }
-  item.messages.push({ author: state.profile.name, text, time, mine: true });
+  item.messages.push({ author: state.profile.name, text, time, mine: true, quote: quoteMessage }); quoteMessage = null;
   item.preview = text; item.time = '刚刚'; input.value = ''; input.style.height = '32px';
   persist(); renderList(); renderChat();
 }
+function messageActions(index) {
+  const item = activeConversation(); const message = item.messages[index]; if (!message) return;
+  openModal('消息操作', `<div class="message-action-list"><button id="quoteAction">引用回复</button>${message.mine && !message.deleted ? '<button id="retractAction">撤回消息</button>' : ''}</div>`);
+  $('#quoteAction').addEventListener('click', () => { quoteMessage = message; $('#messageInput').focus(); closeModal(); showToast('已引用消息'); });
+  if ($('#retractAction')) $('#retractAction').addEventListener('click', () => {
+    message.deleted = true; message.text = ''; if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'retract', recipient: String(item.handle || '').replace(/^@/, ''), index }));
+    persist(); renderChat(); closeModal(); showToast('消息已撤回');
+  });
+}
+async function startCall(video) {
+  const item = activeConversation(); if (!item || !socket || socket.readyState !== WebSocket.OPEN) return showToast('实时连接未建立');
+  try { localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video }); } catch { return showToast('请允许浏览器使用麦克风或摄像头'); }
+  peerConnection = new RTCPeerConnection(); localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+  peerConnection.ontrack = event => { $('#remoteVideo').srcObject = event.streams[0]; };
+  peerConnection.onicecandidate = event => { if (event.candidate) socket.send(JSON.stringify({ type: 'call-signal', recipient: String(item.handle).replace(/^@/, ''), signal: { candidate: event.candidate } })); };
+  const offer = await peerConnection.createOffer(); await peerConnection.setLocalDescription(offer);
+  socket.send(JSON.stringify({ type: 'call-signal', recipient: String(item.handle).replace(/^@/, ''), signal: { offer, video } }));
+  $('#callOverlay').hidden = false; $('#callTitle').textContent = `呼叫 ${item.name}`; $('#localVideo').srcObject = localStream; $('#acceptCallBtn').hidden = true;
+}
+function endCall() { if (peerConnection) peerConnection.close(); if (localStream) localStream.getTracks().forEach(track => track.stop()); peerConnection = null; localStream = null; $('#localVideo').srcObject = null; $('#remoteVideo').srcObject = null; $('#callOverlay').hidden = true; }
 function insertText(text) {
   const input = $('#messageInput'); const start = input.selectionStart; const end = input.selectionEnd;
   input.value = `${input.value.slice(0, start)}${text}${input.value.slice(end)}`; input.focus(); input.selectionStart = input.selectionEnd = start + text.length;
@@ -182,7 +206,8 @@ function clearData() { if (!confirm('确定清空本机消息和联系人吗？'
 $('#sendBtn').addEventListener('click', sendMessage); $('#messageInput').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }); $('#messageInput').addEventListener('input', event => { event.target.style.height = '32px'; event.target.style.height = `${Math.min(event.target.scrollHeight, 115)}px`; }); $('#searchInput').addEventListener('input', event => { state.query = event.target.value; renderList(); });
 document.querySelectorAll('.filter-tab').forEach(tab => tab.addEventListener('click', () => { document.querySelectorAll('.filter-tab').forEach(node => node.classList.remove('active')); tab.classList.add('active'); state.filter = tab.dataset.filter; renderList(); }));
 document.querySelectorAll('.rail-btn[data-view]').forEach(button => button.addEventListener('click', () => { document.querySelectorAll('.rail-btn').forEach(node => node.classList.remove('active')); button.classList.add('active'); if (button.dataset.view === 'contacts') openContacts(); if (button.dataset.view === 'files') showToast('文件中心：可在聊天中使用附件按钮'); if (button.dataset.view === 'chats') closeModal(); }));
-$('#newChatBtn').addEventListener('click', openNewChat); $('#detailsClose').addEventListener('click', () => { $('#detailsPanel').style.display = 'none'; }); $('#moreBtn').addEventListener('click', () => { $('#detailsPanel').style.display = ''; showToast('已打开会话详情'); }); $('#callBtn').addEventListener('click', () => showToast('通话功能需要配置媒体服务')); $('#messageSearchBtn').addEventListener('click', () => { $('#searchInput').focus(); showToast('可搜索当前会话'); }); $('#settingsBtn').addEventListener('click', openSettings); $('.profile-mini').addEventListener('click', openProfile); $('#modalClose').addEventListener('click', closeModal); $('#modalBackdrop').addEventListener('click', event => { if (event.target === $('#modalBackdrop')) closeModal(); });
+$('#newChatBtn').addEventListener('click', openNewChat); $('#detailsClose').addEventListener('click', () => { $('#detailsPanel').style.display = 'none'; }); $('#moreBtn').addEventListener('click', () => { $('#detailsPanel').style.display = ''; showToast('已打开会话详情'); }); $('#callBtn').addEventListener('click', () => startCall(false)); $('#messageSearchBtn').addEventListener('click', () => { $('#searchInput').focus(); showToast('可搜索当前会话'); }); $('#settingsBtn').addEventListener('click', openSettings); $('.profile-mini').addEventListener('click', openProfile); $('#modalClose').addEventListener('click', closeModal); $('#modalBackdrop').addEventListener('click', event => { if (event.target === $('#modalBackdrop')) closeModal(); });
+$('#hangupBtn').addEventListener('click', endCall);
 $('#stickerBtn').addEventListener('click', openStickerPicker); $('#attachBtn').addEventListener('click', () => $('#fileInput').click()); $('#imageBtn').addEventListener('click', () => { $('#fileInput').accept = 'image/*'; $('#fileInput').click(); }); $('#fileInput').addEventListener('change', event => { sendFile(event.target.files[0]); event.target.value = ''; }); $('#detailsNote').addEventListener('click', openNoteEditor);
 $('#avatarInput').addEventListener('change', event => { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { state.profile.avatarUrl = reader.result; state.profile.avatar = ''; persist(); openProfile(); showToast('头像已更新'); }; reader.readAsDataURL(file); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); $('#searchInput').focus(); } });
@@ -210,13 +235,21 @@ function connectSocket() {
       conversation = { ...item, preview: '', time: '刚刚', unread: 0, group: false, messages: [] };
       state.conversations.unshift(conversation);
     }
+    if (payload.type === 'retract') { if (conversation.messages[payload.index]) conversation.messages[payload.index].deleted = true; persist(); renderChat(); return; }
+    if (payload.type === 'call-signal') { handleCallSignal(payload); return; }
     const attachment = payload.body.startsWith('__attachment__') ? JSON.parse(payload.body.slice(15)) : null;
-    conversation.messages.push({ author: conversation.name, text: attachment ? attachment.name : payload.body, attachment, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false });
+    conversation.messages.push({ author: conversation.name, text: attachment ? attachment.name : payload.body, quote: payload.quote, attachment, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false });
     conversation.preview = attachment ? `文件 · ${attachment.name}` : payload.body; conversation.time = '刚刚';
     if (state.activeId !== conversation.id) conversation.unread = (conversation.unread || 0) + 1;
     persist(); renderList(); renderChat();
   });
   socket.addEventListener('close', () => { const status = document.querySelector('.sync-label'); if (status) status.textContent = '连接断开'; });
+}
+async function handleCallSignal(payload) {
+  const signal = payload.signal; if (!signal) return;
+  if (signal.offer) { $('#callOverlay').hidden = false; $('#callTitle').textContent = '收到通话邀请'; $('#callStatus').textContent = '对方邀请你通话'; $('#acceptCallBtn').hidden = false; $('#acceptCallBtn').onclick = async () => { peerConnection = new RTCPeerConnection(); localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: signal.video }); localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream)); peerConnection.ontrack = event => { $('#remoteVideo').srcObject = event.streams[0]; }; await peerConnection.setRemoteDescription(signal.offer); const answer = await peerConnection.createAnswer(); await peerConnection.setLocalDescription(answer); socket.send(JSON.stringify({ type: 'call-signal', recipient: payload.sender, signal: { answer } })); $('#acceptCallBtn').hidden = true; $('#localVideo').srcObject = localStream; }; }
+  if (signal.answer && peerConnection) await peerConnection.setRemoteDescription(signal.answer);
+  if (signal.candidate && peerConnection) await peerConnection.addIceCandidate(signal.candidate);
 }
 function initAuth() {
   let mode = 'login';

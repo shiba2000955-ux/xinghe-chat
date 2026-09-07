@@ -326,16 +326,19 @@ async def websocket(request):
                 payload = json.loads(message.data)
             except json.JSONDecodeError:
                 continue
+            sender = session['user']['username']
+            recipient = str(payload.get('recipient', '')).strip()
+            if payload.get('type') in ('retract', 'call-signal'):
+                await broadcast({'type': payload['type'], 'sender': sender, 'recipient': recipient, **payload})
+                continue
             if payload.get('type') != 'message' or not str(payload.get('body', '')).strip():
                 continue
             body = str(payload['body']).strip()[:3_000_000]
-            recipient = str(payload.get('recipient', '')).strip()
-            sender = session['user']['username']
             connection = db()
             connection.execute('INSERT INTO messages(sender, recipient, body) VALUES (?, ?, ?)', (sender, recipient, body))
             connection.commit()
             connection.close()
-            await broadcast({'type': 'message', 'sender': sender, 'recipient': recipient, 'body': body})
+            await broadcast({'type': 'message', 'sender': sender, 'recipient': recipient, 'body': body, 'quote': payload.get('quote')})
         elif message.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
             break
     if session.get('socket') is socket:

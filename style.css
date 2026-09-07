@@ -13,6 +13,7 @@
   background: #e8efec;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; min-width: 1080px; background: radial-gradient(circle at 85% 10%, #f7ded1 0 9%, transparent 23%), linear-gradient(135deg, #dcebe4 0%, #eff4f0 48%, #e7eef5 100%); }
 button, input, textarea { font: inherit; }
 button { border: 0; cursor: pointer; }
@@ -59,6 +60,20 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 29px; letter-spacing: -.04em; } h2 
 }
 
 .emoji-choice:hover { background: #e5edff; }
+
+.message-row { cursor: context-menu; }
+.quoted-message { display: block; margin-bottom: 6px; padding-left: 8px; opacity: .7; border-left: 2px solid currentColor; }
+.deleted-message { color: #99a6a8; font-style: italic; background: #eef1f1; }
+.message-action-list { display: grid; gap: 8px; }
+.message-action-list button { padding: 12px 14px; text-align: left; border-radius: 10px; background: #f2f5f6; }
+.message-action-list button:hover { color: var(--blue); background: var(--blue-soft); }
+.call-overlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(18, 35, 43, .58); }
+.call-card { width: min(520px, calc(100vw - 40px)); padding: 28px; text-align: center; border-radius: 22px; background: white; box-shadow: var(--shadow); }
+.call-avatar { display: grid; place-items: center; width: 72px; height: 72px; margin: 0 auto 14px; color: #1d4a54; font-size: 27px; font-weight: 700; border-radius: 22px; background: #d7e9e2; }
+.call-card p { margin: 8px 0 18px; color: var(--muted); }
+.call-video-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+.call-video-grid video { width: 100%; min-height: 140px; object-fit: cover; border-radius: 12px; background: #182b35; }
+.call-actions { display: flex; justify-content: center; gap: 10px; }
 
 .file-bubble {
   display: flex;

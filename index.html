@@ -129,6 +129,15 @@
   </div>
   <input id="avatarInput" type="file" accept="image/*" hidden />
   <input id="fileInput" type="file" hidden />
+  <div class="call-overlay" id="callOverlay" hidden>
+    <div class="call-card">
+      <div class="call-avatar" id="callAvatar">周</div>
+      <h2 id="callTitle">正在呼叫</h2>
+      <p id="callStatus">等待对方接听...</p>
+      <div class="call-video-grid"><video id="localVideo" autoplay muted playsinline></video><video id="remoteVideo" autoplay playsinline></video></div>
+      <div class="call-actions"><button class="modal-btn danger" id="hangupBtn">挂断</button><button class="modal-btn primary" id="acceptCallBtn" hidden>接听</button></div>
+    </div>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>
