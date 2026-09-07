@@ -45,6 +45,8 @@ class PostgresConnection:
 
 def db():
     if DATABASE_URL:
+        if any(marker in DATABASE_URL.lower() for marker in ('hidden', 'password', '[your-', 'your-password')):
+            raise RuntimeError('DATABASE_URL 仍是示例值，请在 Render 中粘贴 Supabase 的完整 URI')
         if psycopg2 is None:
             raise RuntimeError('DATABASE_URL 已配置，但缺少 psycopg2 依赖')
         connection = PostgresConnection(DATABASE_URL)
@@ -355,7 +357,17 @@ async def index(request):
     return web.FileResponse(ROOT / 'index.html')
 
 
-app = web.Application(client_max_size=8 * 1024 * 1024)
+@web.middleware
+async def json_errors(request, handler):
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise
+    except Exception as error:
+        return await json_response({'error': f'服务器内部错误：{error}'}, 503)
+
+
+app = web.Application(client_max_size=8 * 1024 * 1024, middlewares=[json_errors])
 app.router.add_post('/api/register', register)
 app.router.add_post('/api/login', login)
 app.router.add_get('/api/history', history)

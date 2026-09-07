@@ -46,7 +46,9 @@ async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}), 'X-Auth-Token': authToken };
   if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const response = await fetch(path, { ...options, headers });
-  const result = await response.json();
+  const raw = await response.text();
+  let result = {};
+  try { result = raw ? JSON.parse(raw) : {}; } catch { result = { error: `服务器返回了无效响应（HTTP ${response.status}）` }; }
   if (response.status === 401) {
     localStorage.removeItem('nova-token'); localStorage.removeItem('nova-user');
     authToken = ''; currentUser = null;
