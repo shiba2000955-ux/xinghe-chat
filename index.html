@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>星河通讯</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <section class="auth-screen" id="authScreen">
+    <div class="auth-card">
+      <div class="brand-mark auth-brand">星</div>
+      <p class="eyebrow">NOVA MESSENGER</p>
+      <h1>连接你的星河</h1>
+      <p class="auth-copy">注册账号后，即可在不同设备间实时收发消息。</p>
+      <div class="auth-tabs"><button class="auth-tab active" data-auth-mode="login">登录</button><button class="auth-tab" data-auth-mode="register">注册</button></div>
+      <form id="authForm">
+        <label class="modal-label">用户名</label><input class="modal-input" id="authUsername" autocomplete="username" required placeholder="至少 3 位" />
+        <label class="modal-label auth-name-label" hidden>昵称</label><input class="modal-input auth-name-input" id="authName" autocomplete="name" placeholder="你的显示昵称" hidden />
+        <label class="modal-label">密码</label><input class="modal-input" id="authPassword" type="password" autocomplete="current-password" required placeholder="至少 6 位" />
+        <p class="auth-error" id="authError"></p><button class="modal-btn primary auth-submit" type="submit" id="authSubmit">登录并进入</button>
+      </form>
+      <p class="auth-footnote">消息通过加密连接传输，账号数据由部署的服务端保存。</p>
+    </div>
+  </section>
+  <main class="app-shell">
+    <aside class="rail">
+      <div class="brand-mark">星</div>
+      <nav class="rail-nav" aria-label="主导航">
+        <button class="rail-btn active" data-view="chats" title="聊天">▤<span>聊天</span></button>
+        <button class="rail-btn" data-view="contacts" title="联系人">♧<span>联系人</span></button>
+        <button class="rail-btn" data-view="files" title="文件">⌁<span>文件</span></button>
+      </nav>
+      <div class="rail-bottom">
+        <button class="rail-btn" title="设置" id="settingsBtn">⚙<span>设置</span></button>
+        <div class="profile-mini">林</div>
+      </div>
+    </aside>
+
+    <section class="sidebar">
+      <header class="sidebar-head">
+        <div>
+          <p class="eyebrow">NOVA MESSENGER</p>
+          <h1 id="sectionTitle">消息</h1>
+        </div>
+        <button class="icon-btn accent" id="newChatBtn" title="新建会话">＋</button>
+      </header>
+      <div class="search-wrap">
+        <span>⌕</span>
+        <input id="searchInput" type="search" placeholder="搜索会话、联系人" autocomplete="off" />
+        <kbd>⌘ K</kbd>
+      </div>
+      <div class="filter-tabs">
+        <button class="filter-tab active" data-filter="all">全部 <b id="allCount">4</b></button>
+        <button class="filter-tab" data-filter="unread">未读 <b id="unreadCount">2</b></button>
+        <button class="filter-tab" data-filter="groups">群组</button>
+      </div>
+      <div id="conversationList" class="conversation-list"></div>
+      <div class="sidebar-footer">
+        <div class="status-dot"></div>
+        <span>在线</span>
+        <span class="footer-spacer"></span>
+        <span class="sync-label">已同步</span>
+      </div>
+    </section>
+
+    <section class="chat-panel">
+      <header class="chat-head">
+        <div class="chat-person">
+          <div class="avatar avatar-large" id="activeAvatar">周</div>
+          <div>
+            <h2 id="activeName">周芷若</h2>
+            <p id="activeStatus"><span class="online-dot"></span> 在线，回复很快</p>
+          </div>
+        </div>
+        <div class="chat-actions">
+          <button class="icon-btn" title="搜索消息" id="messageSearchBtn">⌕</button>
+          <button class="icon-btn" title="发起通话" id="callBtn">♧</button>
+          <button class="icon-btn" title="更多" id="moreBtn">•••</button>
+        </div>
+      </header>
+      <div id="messageArea" class="message-area"></div>
+      <div class="typing-bar" id="typingBar"><span class="typing-bubbles"><i></i><i></i><i></i></span> 周芷若正在输入...</div>
+      <footer class="composer">
+        <div class="composer-tools">
+          <button class="tool-btn" title="添加附件" id="attachBtn">＋</button>
+          <button class="tool-btn" title="发送图片" id="imageBtn">▧</button>
+          <button class="tool-btn" title="发送贴纸" id="stickerBtn">☺</button>
+        </div>
+        <textarea id="messageInput" rows="1" placeholder="写下消息..." aria-label="消息输入框"></textarea>
+        <button class="send-btn" id="sendBtn" title="发送消息">↗</button>
+      </footer>
+      <div class="composer-hint"><span>Enter 发送</span><span>Shift + Enter 换行</span></div>
+    </section>
+
+    <aside class="details-panel" id="detailsPanel">
+      <div class="details-cover"></div>
+      <div class="details-avatar avatar avatar-xl" id="detailsAvatar">周</div>
+      <button class="details-close" id="detailsClose">×</button>
+      <div class="details-content">
+        <h3 id="detailsName">周芷若</h3>
+        <p id="detailsHandle">@zhi_ruo · 武汉</p>
+        <div class="detail-actions">
+          <button><span>♧</span> 通话</button>
+          <button><span>⌁</span> 共享</button>
+          <button><span>•••</span> 更多</button>
+        </div>
+        <div class="info-block">
+          <div class="info-row"><span>备注</span><strong id="detailsNote">产品设计师</strong></div>
+          <div class="info-row"><span>共同群组</span><strong>3 个群组</strong></div>
+        </div>
+        <div class="media-block">
+          <div class="block-title"><span>共享媒体</span><span>查看全部 24</span></div>
+          <div class="media-grid"><div class="media-tile tile-one">✦</div><div class="media-tile tile-two">◌</div><div class="media-tile tile-three">⌁</div></div>
+        </div>
+        <button class="mute-row"><span>◒</span> 消息免打扰 <span class="toggle"></span></button>
+        <button class="danger-row">清空聊天记录</button>
+      </div>
+    </aside>
+  </main>
+  <div class="toast" id="toast"></div>
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <button class="modal-close" id="modalClose" title="关闭">×</button>
+      <div class="modal-kicker">NOVA SOCIAL</div>
+      <h2 id="modalTitle">联系人</h2>
+      <div id="modalBody"></div>
+    </section>
+  </div>
+  <input id="avatarInput" type="file" accept="image/*" hidden />
+  <script src="app.js"></script>
+</body>
+</html>

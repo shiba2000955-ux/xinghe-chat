@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: xinghe-messenger
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /health
+    envVars:
+      - key: NOVA_DB_PATH
+        value: /tmp/nova.db
