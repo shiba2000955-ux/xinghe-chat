@@ -316,7 +316,7 @@ async def websocket(request):
     if not user:
         return web.Response(status=401, text='登录已失效')
     session = CLIENTS.setdefault(token, {'user': user, 'socket': None})
-    socket = web.WebSocketResponse(heartbeat=25)
+    socket = web.WebSocketResponse(heartbeat=25, max_msg_size=8 * 1024 * 1024)
     await socket.prepare(request)
     session['socket'] = socket
     await socket.send_json({'type': 'connected', 'user': session['user']})
@@ -333,7 +333,7 @@ async def websocket(request):
                 continue
             if payload.get('type') != 'message' or not str(payload.get('body', '')).strip():
                 continue
-            body = str(payload['body']).strip()[:3_000_000]
+            body = str(payload['body']).strip()[:8_000_000]
             connection = db()
             connection.execute('INSERT INTO messages(sender, recipient, body) VALUES (?, ?, ?)', (sender, recipient, body))
             connection.commit()

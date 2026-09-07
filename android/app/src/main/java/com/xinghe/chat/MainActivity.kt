@@ -12,6 +12,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebSettings
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
@@ -28,6 +29,7 @@ class MainActivity : Activity() {
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         webView.settings.mediaPlaybackRequiresUserGesture = false
+        webView.settings.cacheMode = WebSettings.LOAD_NO_CACHE
         webView.settings.allowFileAccess = true
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {

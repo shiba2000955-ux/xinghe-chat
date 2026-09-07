@@ -52,9 +52,9 @@ async function toggleVoiceRecording() {
       const duration = Math.max(1, Math.round((Date.now() - voiceStartedAt) / 1000));
       if (duration > 60) return showToast('语音最长 60 秒');
       const blob = new Blob(voiceChunks, { type: voiceRecorder.mimeType || 'audio/webm' });
-      if (blob.size > 2 * 1024 * 1024) return showToast('语音文件不能超过 2 MB');
+      if (blob.size > 1.5 * 1024 * 1024) return showToast('语音文件不能超过 1.5 MB');
       const reader = new FileReader();
-      reader.onload = () => sendVoice({ dataUrl: reader.result, duration });
+      reader.onload = () => sendVoice({ dataUrl: reader.result, mimeType: blob.type || 'audio/webm', duration });
       reader.readAsDataURL(blob);
     };
     voiceRecorder.start(); button.classList.add('recording'); button.textContent = '■'; showToast('正在录音，再点一次结束');
@@ -76,11 +76,37 @@ function renderChat() {
   $('#messageArea').innerHTML = `<div class="date-divider">今天</div>${item.messages.map((message, index) => `<div class="message-row ${message.mine ? 'mine' : ''}" data-message-index="${index}">${message.mine ? '' : `<div class="${avatarClass(item)} message-avatar">${renderAvatar(item)}</div>`}<div class="bubble-wrap">${message.author && !message.mine ? `<div class="message-author">${escapeHtml(message.author)}</div>` : ''}${message.deleted ? '<div class="bubble deleted-message">这条消息已撤回</div>' : message.voice ? renderVoice(message.voice) : message.attachment ? `<a class="file-bubble" href="${message.attachment.dataUrl || '#'}" download="${escapeHtml(message.attachment.name)}">📎 <strong>${escapeHtml(message.attachment.name)}</strong><small>${formatBytes(message.attachment.size)} · 下载文件</small></a>` : `<div class="bubble">${message.quote ? `<small class="quoted-message">引用：${escapeHtml(message.quote.text)}</small>` : ''}${escapeHtml(message.text).replace(/\n/g, '<br>')}</div>`}<div class="message-time">${message.time}${message.mine ? ' · 已送达' : ''}</div></div></div>`).join('')}`;
   document.querySelectorAll('[data-message-index]').forEach(row => row.addEventListener('contextmenu', event => { event.preventDefault(); messageActions(Number(row.dataset.messageIndex)); }));
   $('#messageArea').scrollTop = $('#messageArea').scrollHeight;
+  prepareVoicePlayback();
 }
 function selectConversation(id) { state.activeId = id; const item = activeConversation(); item.unread = 0; persist(); renderList(); renderChat(); document.querySelector('.app-shell').classList.add('mobile-chat-open'); }
 function escapeHtml(text) { return String(text).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 function formatBytes(bytes) { if (!bytes) return '0 B'; if (bytes < 1024) return `${bytes} B`; if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`; return `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
-function renderVoice(voice) { return `<div class="voice-bubble">🎙 <audio controls preload="metadata" src="${voice.dataUrl}"></audio><small>${voice.duration}s</small></div>`; }
+function renderVoice(voice) {
+  const source = voice.objectUrl || normalizeAudioUrl(voice.dataUrl, voice.mimeType);
+  return `<div class="voice-bubble">🎙 <audio controls preload="metadata" src="${source}"></audio><small>${voice.duration}s</small></div>`;
+}
+function normalizeAudioUrl(dataUrl, mimeType = 'audio/webm') {
+  if (!dataUrl) return '';
+  return dataUrl.startsWith('data:') ? dataUrl : `data:${mimeType};base64,${dataUrl}`;
+}
+async function prepareVoicePlayback() {
+  const voices = document.querySelectorAll('.voice-bubble audio');
+  for (const audio of voices) {
+    if (audio.dataset.prepared === 'true') continue;
+    audio.dataset.prepared = 'true';
+    const source = audio.src;
+    try {
+      if (source.startsWith('data:')) {
+        const response = await fetch(source);
+        const blob = await response.blob();
+        audio.src = URL.createObjectURL(blob);
+      }
+      audio.addEventListener('error', () => showToast('此设备不支持该语音格式，请更新 APP 后重试'), { once: true });
+    } catch {
+      showToast('语音加载失败，请重新发送');
+    }
+  }
+}
 function showToast(message) { const toast = $('#toast'); toast.textContent = message; toast.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => toast.classList.remove('show'), 2400); }
 async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}), 'X-Auth-Token': authToken };
@@ -126,7 +152,8 @@ async function loadHistory() {
     const exists = conversation.messages.some(entry => entry.text === message.body && entry.serverTime === message.created_at);
     let attachment = null; let voice = null;
     try {
-      if (message.body.startsWith('__attachment__')) attachment = JSON.parse(message.body.slice(15));
+      const attachmentPrefix = '__attachment__';
+      if (message.body.startsWith(attachmentPrefix)) attachment = JSON.parse(message.body.slice(attachmentPrefix.length));
       if (message.body.startsWith('__voice__')) voice = JSON.parse(message.body.slice(9));
     } catch { showToast('历史附件无法读取'); }
     if (!exists) conversation.messages.push({ author: message.sender === currentUser.username ? state.profile.name : conversation.name, text: voice ? '语音消息' : attachment ? attachment.name : message.body, attachment, voice, time: new Date(`${message.created_at}Z`).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), serverTime: message.created_at, mine: message.sender === currentUser.username });
@@ -263,13 +290,14 @@ function connectSocket() {
   socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws?token=${encodeURIComponent(authToken)}`);
   socket.addEventListener('open', () => { const status = document.querySelector('.sync-label'); if (status) status.textContent = '实时在线'; showToast('已连接到实时消息服务'); });
   socket.addEventListener('message', event => {
-    const payload = JSON.parse(event.data);
+    let payload;
+    try { payload = JSON.parse(event.data); } catch { showToast('收到的消息格式错误'); return; }
     if (payload.sender === currentUser.username) return;
     if (payload.type === 'call-signal') { handleCallSignal(payload); return; }
     const sender = String(payload.sender).replace(/^@/, '');
     const item = state.conversations.find(conversation => String(conversation.handle || '').replace(/^@/, '') === sender)
-      || state.contacts.find(contact => String(contact.handle || '').replace(/^@/, '') === sender);
-    if (!item) return;
+      || state.contacts.find(contact => String(contact.handle || '').replace(/^@/, '') === sender)
+      || { id: `remote-${sender}`, name: sender, handle: `@${sender}`, note: '在线联系人', avatar: sender.slice(0, 1).toUpperCase(), tone: 'blue', online: true, group: false };
     let conversation = state.conversations.find(entry => entry.id === item.id);
     if (!conversation) {
       conversation = { ...item, preview: '', time: '刚刚', unread: 0, group: false, messages: [] };
@@ -279,7 +307,8 @@ function connectSocket() {
     if (payload.type !== 'message' || !payload.body) return;
     let attachment = null; let voice = null;
     try {
-      if (payload.body.startsWith('__attachment__')) attachment = JSON.parse(payload.body.slice(15));
+      const attachmentPrefix = '__attachment__';
+      if (payload.body.startsWith(attachmentPrefix)) attachment = JSON.parse(payload.body.slice(attachmentPrefix.length));
       if (payload.body.startsWith('__voice__')) voice = JSON.parse(payload.body.slice(9));
     } catch { showToast('收到的附件无法读取'); }
     conversation.messages.push({ author: conversation.name, text: voice ? '语音消息' : attachment ? attachment.name : payload.body, quote: payload.quote, attachment, voice, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), mine: false });
