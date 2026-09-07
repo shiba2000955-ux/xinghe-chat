@@ -33,6 +33,14 @@ def db():
             body TEXT NOT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS friend_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id INTEGER NOT NULL,
+            recipient_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(sender_id, recipient_id)
+        );
     ''')
     return connection
 
@@ -49,6 +57,15 @@ def token_for(user):
     token = secrets.token_urlsafe(32)
     CLIENTS[token] = {'user': public_user(user), 'socket': None}
     return token
+
+
+def session_user(request):
+    session = CLIENTS.get(request.headers.get('X-Auth-Token'))
+    return session['user'] if session else None
+
+
+def user_by_id(connection, user_id):
+    return connection.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
 
 
 async def json_response(data, status=200):
@@ -86,14 +103,108 @@ async def login(request):
 
 
 async def history(request):
-    token = request.headers.get('X-Auth-Token')
-    session = CLIENTS.get(token)
-    if not session:
+    user = session_user(request)
+    if not user:
         return await json_response({'error': '未登录'}, 401)
     connection = db()
     rows = connection.execute('SELECT sender, recipient, body, created_at FROM messages ORDER BY id DESC LIMIT 100').fetchall()
     connection.close()
     return await json_response({'messages': [dict(row) for row in reversed(rows)]})
+
+
+async def find_users(request):
+    user = session_user(request)
+    if not user:
+        return await json_response({'error': '未登录'}, 401)
+    query = str(request.query.get('q', '')).strip().lstrip('@').lower()
+    if len(query) < 2:
+        return await json_response({'users': []})
+    connection = db()
+    rows = connection.execute(
+        'SELECT id, username, display_name FROM users '
+        'WHERE id != ? AND (username LIKE ? OR display_name LIKE ?) LIMIT 20',
+        (user['id'], f'%{query}%', f'%{query}%')
+    ).fetchall()
+    connection.close()
+    return await json_response({'users': [public_user(row) for row in rows]})
+
+
+async def list_contacts(request):
+    user = session_user(request)
+    if not user:
+        return await json_response({'error': '未登录'}, 401)
+    connection = db()
+    rows = connection.execute('''
+        SELECT u.id, u.username, u.display_name, fr.id AS request_id, fr.status,
+               CASE WHEN fr.sender_id = ? THEN 'outgoing' ELSE 'incoming' END AS direction
+        FROM friend_requests fr
+        JOIN users u ON u.id = CASE WHEN fr.sender_id = ? THEN fr.recipient_id ELSE fr.sender_id END
+        WHERE (fr.sender_id = ? OR fr.recipient_id = ?) AND fr.status IN ('pending', 'accepted')
+        ORDER BY fr.id DESC
+    ''', (user['id'], user['id'], user['id'], user['id'])).fetchall()
+    connection.close()
+    contacts = []
+    for row in rows:
+        contacts.append({
+            'id': row['id'], 'username': row['username'], 'name': row['display_name'],
+            'requestId': row['request_id'], 'relation': '好友' if row['status'] == 'accepted'
+            else ('待处理' if row['direction'] == 'incoming' else '已发送')
+        })
+    return await json_response({'contacts': contacts})
+
+
+async def create_friend_request(request):
+    user = session_user(request)
+    if not user:
+        return await json_response({'error': '未登录'}, 401)
+    payload = await request.json()
+    username = str(payload.get('username', '')).strip().lstrip('@').lower()
+    connection = db()
+    target = connection.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
+    if not target or target['id'] == user['id']:
+        connection.close()
+        return await json_response({'error': '找不到这个账号'}, 404)
+    existing = connection.execute(
+        'SELECT * FROM friend_requests WHERE (sender_id = ? AND recipient_id = ?) '
+        'OR (sender_id = ? AND recipient_id = ?)',
+        (user['id'], target['id'], target['id'], user['id'])
+    ).fetchone()
+    if existing:
+        connection.close()
+        return await json_response({'error': '好友申请已经存在或你们已经是好友'}, 409)
+    connection.execute(
+        'INSERT INTO friend_requests(sender_id, recipient_id) VALUES (?, ?)',
+        (user['id'], target['id'])
+    )
+    connection.commit()
+    connection.close()
+    return await json_response({'ok': True, 'message': '好友申请已发送'})
+
+
+async def update_friend_request(request):
+    user = session_user(request)
+    if not user:
+        return await json_response({'error': '未登录'}, 401)
+    try:
+        request_id = int(request.match_info['request_id'])
+    except ValueError:
+        return await json_response({'error': '申请无效'}, 400)
+    action = (await request.json()).get('action')
+    if action not in ('accept', 'reject'):
+        return await json_response({'error': '操作无效'}, 400)
+    connection = db()
+    row = connection.execute(
+        'SELECT * FROM friend_requests WHERE id = ? AND recipient_id = ? AND status = ?',
+        (request_id, user['id'], 'pending')
+    ).fetchone()
+    if not row:
+        connection.close()
+        return await json_response({'error': '申请不存在或已处理'}, 404)
+    status = 'accepted' if action == 'accept' else 'rejected'
+    connection.execute('UPDATE friend_requests SET status = ? WHERE id = ?', (status, request_id))
+    connection.commit()
+    connection.close()
+    return await json_response({'ok': True, 'status': status})
 
 
 async def broadcast(payload):
@@ -153,6 +264,10 @@ app = web.Application(client_max_size=8 * 1024 * 1024)
 app.router.add_post('/api/register', register)
 app.router.add_post('/api/login', login)
 app.router.add_get('/api/history', history)
+app.router.add_get('/api/users', find_users)
+app.router.add_get('/api/contacts', list_contacts)
+app.router.add_post('/api/friend-requests', create_friend_request)
+app.router.add_post('/api/friend-requests/{request_id}', update_friend_request)
 app.router.add_get('/ws', websocket)
 app.router.add_get('/health', health)
 app.router.add_get('/', index)

@@ -42,12 +42,61 @@ function renderChat() {
 function selectConversation(id) { state.activeId = id; const item = activeConversation(); item.unread = 0; persist(); renderList(); renderChat(); }
 function escapeHtml(text) { return String(text).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 function showToast(message) { const toast = $('#toast'); toast.textContent = message; toast.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => toast.classList.remove('show'), 2400); }
+async function apiFetch(path, options = {}) {
+  const headers = { ...(options.headers || {}), 'X-Auth-Token': authToken };
+  if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const response = await fetch(path, { ...options, headers });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || '网络请求失败');
+  return result;
+}
+async function syncContacts() {
+  if (!authToken) return;
+  const result = await apiFetch('/api/contacts');
+  state.contacts = result.contacts.map(contact => ({
+    id: `remote-${contact.username}`, name: contact.name, handle: `@${contact.username}`,
+    note: contact.relation === '待处理' ? '好友申请' : '已添加好友', avatar: contact.name.slice(0, 1),
+    tone: 'blue', online: false, relation: contact.relation, requestId: contact.requestId,
+    username: contact.username
+  }));
+  save('nova-contacts', state.contacts);
+}
 function openModal(title, body) { $('#modalTitle').textContent = title; $('#modalBody').innerHTML = body; $('#modalBackdrop').hidden = false; }
 function closeModal() { $('#modalBackdrop').hidden = true; }
 function sendMessage() { const input = $('#messageInput'); const text = input.value.trim(); if (!text) return; const item = activeConversation(); const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); if (socket && socket.readyState === WebSocket.OPEN) { socket.send(JSON.stringify({ type: 'message', recipient: item.handle, body: text })); } else { item.messages.push({ author: state.profile.name, text, time, mine: true }); } item.preview = text; item.time = '刚刚'; input.value = ''; input.style.height = '32px'; persist(); renderList(); renderChat(); }
-function openContacts() { openModal('联系人', `<div class="modal-section"><label class="modal-label">搜索用户或手机号</label><input class="modal-input" id="contactSearch" placeholder="例如：@someone 或 138..." /><div class="modal-actions"><button class="modal-btn primary" id="findContact">查找并添加</button></div></div><div class="modal-section"><label class="modal-label">我的联系人</label><div id="contactRows">${renderContactRows()}</div></div>`); $('#findContact').addEventListener('click', findContact); $('#contactSearch').addEventListener('keydown', event => { if (event.key === 'Enter') findContact(); }); document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => { const contact = state.contacts.find(item => item.id === button.dataset.id); if (button.dataset.action === 'accept' && contact) { contact.relation = '好友'; persist(); openContacts(); showToast('已添加为好友'); } else if (button.dataset.action === 'reject' && contact) { state.contacts = state.contacts.filter(item => item.id !== contact.id); persist(); openContacts(); showToast('已忽略好友申请'); } else if (button.dataset.action === 'chat') { ensureConversation(button.dataset.id); closeModal(); } })); }
-function renderContactRows() { return state.contacts.map(contact => `<div class="request-row"><div class="${avatarClass(contact)}">${renderAvatar(contact)}</div><div><strong>${escapeHtml(contact.name)}</strong><small>${escapeHtml(contact.handle)} · ${escapeHtml(contact.note)}</small></div>${contact.relation === '待处理' ? `<div class="request-actions"><button data-action="accept" data-id="${contact.id}">同意</button><button data-action="reject" data-id="${contact.id}">忽略</button></div>` : `<div class="request-actions"><button data-action="chat" data-id="${contact.id}">聊天</button></div>`}</div>`).join('') || '<div class="empty-state">还没有联系人</div>'; }
-function findContact() { const query = $('#contactSearch').value.trim(); if (!query) return showToast('请输入用户名或手机号'); const exists = state.contacts.some(contact => `${contact.name}${contact.handle}`.includes(query)); if (exists) return showToast('该用户已经在联系人列表'); const name = query.replace(/^@/, '') || '新朋友'; state.contacts.push({ id: `user-${Date.now()}`, name, handle: `@${name}`, note: '刚刚认识', avatar: name.slice(0, 1), tone: 'blue', online: true, relation: '待处理' }); persist(); openContacts(); showToast('好友申请已发送'); }
+function bindContactActions() {
+  $('#findContact').addEventListener('click', findContact);
+  $('#contactSearch').addEventListener('keydown', event => { if (event.key === 'Enter') findContact(); });
+  document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', async () => {
+    const contact = state.contacts.find(item => item.id === button.dataset.id);
+    if (!contact) return;
+    try {
+      if ((button.dataset.action === 'accept' || button.dataset.action === 'reject') && contact.requestId) {
+        await apiFetch(`/api/friend-requests/${contact.requestId}`, { method: 'POST', body: JSON.stringify({ action: button.dataset.action }) });
+      } else if (button.dataset.action === 'accept') {
+        contact.relation = '好友';
+      } else if (button.dataset.action === 'reject') {
+        state.contacts = state.contacts.filter(item => item.id !== contact.id);
+      } else if (button.dataset.action === 'chat') {
+        ensureConversation(contact.id); closeModal(); return;
+      }
+      await syncContacts(); persist(); openContacts(); showToast(button.dataset.action === 'accept' ? '已添加为好友' : '已忽略好友申请');
+    } catch (error) { showToast(error.message); }
+  }));
+}
+function openContacts() {
+  openModal('联系人', `<div class="modal-section"><label class="modal-label">搜索用户或账号 ID</label><input class="modal-input" id="contactSearch" placeholder="例如：someone" /><div class="modal-actions"><button class="modal-btn primary" id="findContact">查找并添加</button></div></div><div class="modal-section"><label class="modal-label">我的联系人</label><div id="contactRows">${renderContactRows()}</div></div>`);
+  bindContactActions();
+}
+function renderContactRows() { return state.contacts.map(contact => `<div class="request-row"><div class="${avatarClass(contact)}">${renderAvatar(contact)}</div><div><strong>${escapeHtml(contact.name)}</strong><small>${escapeHtml(contact.handle)} · ${escapeHtml(contact.note)}</small></div>${contact.relation === '待处理' ? `<div class="request-actions"><button data-action="accept" data-id="${contact.id}">同意</button><button data-action="reject" data-id="${contact.id}">忽略</button></div>` : contact.relation === '已发送' ? '<small>等待对方同意</small>' : `<div class="request-actions"><button data-action="chat" data-id="${contact.id}">聊天</button></div>`}</div>`).join('') || '<div class="empty-state">还没有联系人</div>'; }
+async function findContact() {
+  const query = $('#contactSearch').value.trim().replace(/^@/, '');
+  if (!query) return showToast('请输入账号 ID');
+  try {
+    await apiFetch('/api/friend-requests', { method: 'POST', body: JSON.stringify({ username: query }) });
+    await syncContacts(); openContacts(); showToast('好友申请已发送');
+  } catch (error) { showToast(error.message); }
+}
 function openNewChat() { openModal('新建会话', `<div class="modal-section"><label class="modal-label">选择联系人</label><div class="modal-grid">${state.contacts.filter(item => item.relation === '好友').map(item => `<button class="modal-card" data-chat-id="${item.id}"><div class="${avatarClass(item)}">${renderAvatar(item)}</div><div><h4>${escapeHtml(item.name)}</h4><p>${escapeHtml(item.handle)}</p></div></button>`).join('')}</div></div><div class="modal-actions"><button class="modal-btn" id="newGroupBtn">创建群组</button></div>`); document.querySelectorAll('[data-chat-id]').forEach(button => button.addEventListener('click', () => { ensureConversation(button.dataset.chatId); closeModal(); })); $('#newGroupBtn').addEventListener('click', createGroup); }
 function ensureConversation(id) { const contact = state.contacts.find(item => item.id === id); if (!contact) return; if (!state.conversations.some(item => item.id === id)) state.conversations.unshift({ ...contact, preview: '开始新的聊天吧', time: '刚刚', unread: 0, group: false, messages: [] }); state.activeId = id; persist(); renderList(); renderChat(); }
 function createGroup() { const id = `group-${Date.now()}`; state.conversations.unshift({ id, name: '新建群组', handle: '@new-group', note: '仅自己', avatar: '群', tone: 'group', preview: '群组已创建', time: '刚刚', unread: 0, online: true, group: true, messages: [] }); state.activeId = id; persist(); closeModal(); renderList(); renderChat(); showToast('群组已创建'); }
@@ -65,7 +114,7 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') clos
 async function authenticate(mode, username, password, name) {
   const response = await fetch(`/api/${mode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, name }) });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || '登录失败');
-  authToken = result.token; currentUser = result.user; localStorage.setItem('nova-token', authToken); localStorage.setItem('nova-user', JSON.stringify(currentUser)); state.profile.name = currentUser.name; state.profile.handle = `@${currentUser.username}`; persist(); connectSocket(); $('#authScreen').hidden = true;
+  authToken = result.token; currentUser = result.user; localStorage.setItem('nova-token', authToken); localStorage.setItem('nova-user', JSON.stringify(currentUser)); state.profile.name = currentUser.name; state.profile.handle = `@${currentUser.username}`; persist(); await syncContacts(); connectSocket(); $('#authScreen').hidden = true;
 }
 function connectSocket() {
   if (!authToken) return;
@@ -79,6 +128,6 @@ function initAuth() {
   const nameLabel = $('.auth-name-label'); const nameInput = $('.auth-name-input');
   document.querySelectorAll('[data-auth-mode]').forEach(tab => tab.addEventListener('click', () => { mode = tab.dataset.authMode; document.querySelectorAll('[data-auth-mode]').forEach(node => node.classList.toggle('active', node === tab)); const register = mode === 'register'; nameLabel.hidden = !register; nameInput.hidden = !register; $('#authSubmit').textContent = register ? '注册并进入' : '登录并进入'; }));
   $('#authForm').addEventListener('submit', async event => { event.preventDefault(); $('#authError').textContent = ''; $('#authSubmit').disabled = true; try { await authenticate(mode, $('#authUsername').value.trim(), $('#authPassword').value, $('#authName').value.trim()); } catch (error) { $('#authError').textContent = error.message; } finally { $('#authSubmit').disabled = false; } });
-  if (authToken && currentUser) { $('#authScreen').hidden = true; connectSocket(); } else { $('#authScreen').hidden = false; }
+  if (authToken && currentUser) { $('#authScreen').hidden = true; syncContacts().catch(() => {}); connectSocket(); } else { $('#authScreen').hidden = false; }
 }
 renderList(); renderChat(); initAuth();
