@@ -25,7 +25,28 @@ let voiceStartedAt = 0;
 const $ = selector => document.querySelector(selector);
 const list = $('#conversationList');
 function load(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } }
-function save(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+function save(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    if (key !== 'nova-conversations' || error.name !== 'QuotaExceededError') throw error;
+    const compact = value.map(conversation => ({
+      ...conversation,
+      messages: conversation.messages.map(message => {
+        if (message.attachment) return { ...message, attachment: { ...message.attachment, dataUrl: '' } };
+        if (message.voice) return { ...message, voice: { ...message.voice, dataUrl: '' } };
+        return message;
+      })
+    }));
+    try {
+      localStorage.setItem(key, JSON.stringify(compact));
+      showToast('本地存储空间不足，已清理旧附件缓存');
+    } catch {
+      localStorage.removeItem(key);
+      showToast('本地存储空间不足，聊天缓存已重置');
+    }
+  }
+}
 function persist() { save('nova-conversations', state.conversations); save('nova-contacts', state.contacts); save('nova-profile', state.profile); save('nova-settings', state.settings); }
 function activeConversation() { return state.conversations.find(item => item.id === state.activeId) || state.conversations[0]; }
 function avatarClass(item) { return `avatar ${item.tone || ''}`; }
