@@ -23,6 +23,7 @@ PORT = int(os.environ.get('PORT', '5173'))
 CLIENTS = {}
 TOKEN_SECRET = os.environ.get('NOVA_TOKEN_SECRET', 'nova-development-secret')
 ADMIN_KEY = os.environ.get('NOVA_ADMIN_KEY', '').strip()
+SCHEMA_READY = False
 
 
 class PostgresConnection:
@@ -46,71 +47,77 @@ class PostgresConnection:
 
 
 def db():
+    global SCHEMA_READY
     if DATABASE_URL:
         if any(marker in DATABASE_URL.lower() for marker in ('hidden', 'password', '[your-', 'your-password')):
             raise RuntimeError('DATABASE_URL 仍是示例值，请在 Render 中粘贴 Supabase 的完整 URI')
         if psycopg2 is None:
             raise RuntimeError('DATABASE_URL 已配置，但缺少 psycopg2 依赖')
         connection = PostgresConnection(DATABASE_URL)
-        connection.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id BIGSERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL, display_name TEXT NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS messages (
-                id BIGSERIAL PRIMARY KEY, sender TEXT NOT NULL,
-                recipient TEXT NOT NULL, body TEXT NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS friend_requests (
-                id BIGSERIAL PRIMARY KEY, sender_id BIGINT NOT NULL,
-                recipient_id BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(sender_id, recipient_id)
-            );
-        ''')
-        connection.commit()
-        connection.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip TEXT')
-        connection.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ')
-        connection.commit()
+        if not SCHEMA_READY:
+            connection.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id BIGSERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL, display_name TEXT NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS messages (
+                    id BIGSERIAL PRIMARY KEY, sender TEXT NOT NULL,
+                    recipient TEXT NOT NULL, body TEXT NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS friend_requests (
+                    id BIGSERIAL PRIMARY KEY, sender_id BIGINT NOT NULL,
+                    recipient_id BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(sender_id, recipient_id)
+                );
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip TEXT;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+            ''')
+            connection.commit()
+            SCHEMA_READY = True
         return connection
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     connection.execute('PRAGMA journal_mode=WAL')
-    connection.executescript('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            display_name TEXT NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sender TEXT NOT NULL,
-            recipient TEXT NOT NULL,
-            body TEXT NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS friend_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sender_id INTEGER NOT NULL,
-            recipient_id INTEGER NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(sender_id, recipient_id)
-        );
-    ''')
-    for statement in (
-        'ALTER TABLE users ADD COLUMN last_login_ip TEXT',
-        'ALTER TABLE users ADD COLUMN last_login_at TEXT',
-    ):
-        try:
-            connection.execute(statement)
-        except sqlite3.OperationalError as error:
-            if 'duplicate column name' not in str(error).lower():
-                raise
+    if not SCHEMA_READY:
+        connection.executescript('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_login_ip TEXT,
+                last_login_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS friend_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER NOT NULL,
+                recipient_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(sender_id, recipient_id)
+            );
+        ''')
+        for statement in (
+            'ALTER TABLE users ADD COLUMN last_login_ip TEXT',
+            'ALTER TABLE users ADD COLUMN last_login_at TEXT',
+        ):
+            try:
+                connection.execute(statement)
+            except sqlite3.OperationalError as error:
+                if 'duplicate column name' not in str(error).lower():
+                    raise
+        SCHEMA_READY = True
     return connection
 
 
